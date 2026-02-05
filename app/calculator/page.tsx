@@ -47,6 +47,10 @@ export default function CalculatorPage() {
 	<li>
 	  <Link href="/calculator/od600">→ OD600 (cells/mL + dilution)</Link>
 	</li>
+	
+	<li>
+	  <Link href="/calculator/molecular-weight">→ Molecular Weight (from formula)</Link>
+	</li>
 
       </ul>
     </main>
