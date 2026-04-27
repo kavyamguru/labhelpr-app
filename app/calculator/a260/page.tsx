@@ -1,99 +1,110 @@
 "use client";
+import { useState } from "react";
+import CalcLayout from "@/components/calculator/CalcLayout";
+import { InputField, OutputField, SectionDivider } from "@/components/calculator/Field";
+import { fmt, parse, isPos } from "@/lib/fmt";
 
-import { useMemo, useState } from "react";
-
-type SampleType = "dsDNA" | "RNA" | "ssDNA";
-
-const FACTOR_UG_PER_ML_PER_A260: Record<SampleType, number> = {
-  dsDNA: 50, // µg/mL per A260
-  RNA: 40,
-  ssDNA: 33,
-};
-
-function fmt(x: number, maxFrac = 2) {
-  if (!Number.isFinite(x)) return "—";
-  return x.toLocaleString(undefined, { maximumFractionDigits: maxFrac });
-}
+const NA_TYPES = [
+  { label: "dsDNA",  factor: 50   },
+  { label: "RNA",    factor: 40   },
+  { label: "ssDNA",  factor: 33   },
+  { label: "Custom", factor: null },
+];
 
 export default function A260Page() {
-  const [sampleType, setSampleType] = useState<SampleType>("dsDNA");
-  const [a260, setA260] = useState(1.0);
-  const [dilution, setDilution] = useState(1); // e.g., 10 if diluted 1:10
+  const [a260, setA260]         = useState("");
+  const [dilution, setDilution] = useState("1");
+  const [naType, setNaType]     = useState("dsDNA");
+  const [customFactor, setCustomFactor] = useState("");
+  const [a280, setA280] = useState("");
+  const [a230, setA230] = useState("");
 
-  const result = useMemo(() => {
-    const A = Number(a260) || 0;
-    const D = Number(dilution) || 0;
-    const factor = FACTOR_UG_PER_ML_PER_A260[sampleType];
+  const preset = NA_TYPES.find(t => t.label === naType)!;
+  const factor = preset.factor ?? parse(customFactor);
 
-    // Concentration in µg/mL
-    const ugPerMl = A * factor * D;
+  const a260v     = parse(a260);
+  const dilutionV = parse(dilution);
+  const concUgMl  = isPos(a260v) && isFinite(factor) && isPos(dilutionV) ? a260v * factor * dilutionV : NaN;
+  const concNgUl  = concUgMl;
 
-    // Convert: 1 µg/mL = 1 ng/µL
-    const ngPerUl = ugPerMl;
+  const a280v = parse(a280);
+  const a230v = parse(a230);
+  const ratio260_280 = isPos(a260v) && isPos(a280v) ? a260v / a280v : NaN;
+  const ratio260_230 = isPos(a260v) && isPos(a230v) ? a260v / a230v : NaN;
 
-    return { ugPerMl, ngPerUl, factor };
-  }, [sampleType, a260, dilution]);
+  let purityHint = "";
+  if (isFinite(ratio260_280)) {
+    if (ratio260_280 >= 1.8 && ratio260_280 <= 2.1) purityHint = "Good purity";
+    else if (ratio260_280 < 1.8) purityHint = "Possible protein contamination";
+    else purityHint = "Possible RNA contamination (if DNA)";
+  }
+
+  function reset() { setA260(""); setDilution("1"); setA280(""); setA230(""); }
+
+  const copyText = isFinite(concUgMl)
+    ? `${naType} concentration: ${fmt(concUgMl)} µg/mL (${fmt(concNgUl)} ng/µL)\nA260 = ${a260}, Dilution = ${dilution}x, Factor = ${factor}`
+    : "";
 
   return (
-    <main style={{ padding: 24, maxWidth: 780 }}>
-      <h1>A260 Concentration</h1>
-      <p style={{ opacity: 0.8 }}>
-        Calculate nucleic acid concentration from A260 (NanoDrop/spectrophotometer).
-      </p>
-
-      <div style={{ marginTop: 16, display: "grid", gap: 12 }}>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ width: 180 }}>Sample type</label>
-          <select
-            value={sampleType}
-            onChange={(e) => setSampleType(e.target.value as SampleType)}
-          >
-            <option value="dsDNA">dsDNA (50 µg/mL per A260)</option>
-            <option value="RNA">RNA (40 µg/mL per A260)</option>
-            <option value="ssDNA">ssDNA (33 µg/mL per A260)</option>
-          </select>
+    <CalcLayout
+      title="Nucleic Acid (A260)"
+      description="Calculate DNA/RNA concentration from absorbance readings."
+      onReset={reset}
+      copyText={copyText || undefined}
+      tips={
+        <div className="space-y-1.5">
+          <p><strong>Formula:</strong> Conc (µg/mL) = A260 × factor × dilution</p>
+          <p>Factors: dsDNA = 50, RNA = 40, ssDNA = 33</p>
+          <p>260/280 ≈ 1.8 (DNA), ≈ 2.0 (RNA) → good purity</p>
+          <p>260/230 ≈ 2.0–2.2 → good purity</p>
         </div>
-
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ width: 180 }}>A260</label>
-          <input
-            type="number"
-            step="0.01"
-            value={a260}
-            onChange={(e) => setA260(Number(e.target.value))}
-            style={{ padding: 8, width: 160 }}
-          />
+      }
+    >
+      <div className="space-y-1">
+        <label className="block text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Nucleic Acid Type</label>
+        <div className="flex flex-wrap gap-2">
+          {NA_TYPES.map(t => (
+            <button key={t.label} onClick={() => setNaType(t.label)}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+              style={{ background: naType === t.label ? "var(--accent)" : "var(--bg)", color: naType === t.label ? "#fff" : "var(--text-muted)", border: "1px solid var(--border)" }}>
+              {t.label} {t.factor !== null ? `(×${t.factor})` : ""}
+            </button>
+          ))}
         </div>
-
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ width: 180 }}>Dilution factor</label>
-          <input
-            type="number"
-            value={dilution}
-            onChange={(e) => setDilution(Number(e.target.value))}
-            style={{ padding: 8, width: 160 }}
-          />
-          <span style={{ opacity: 0.7, fontSize: 13 }}>
-            (Use 1 if undiluted; 10 if 1:10 dilution)
-          </span>
-        </div>
+        {naType === "Custom" && (
+          <InputField label="Custom factor" value={customFactor} onChange={setCustomFactor} placeholder="e.g. 45" />
+        )}
       </div>
 
-      <div style={{ marginTop: 22 }}>
-        <div>
-          <strong>Concentration:</strong> {fmt(result.ugPerMl, 2)} µg/mL
-        </div>
-        <div style={{ marginTop: 6 }}>
-          <strong>Same value:</strong> {fmt(result.ngPerUl, 2)} ng/µL
-          <span style={{ opacity: 0.7 }}> (since 1 µg/mL = 1 ng/µL)</span>
-        </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <InputField label="A260 absorbance" value={a260} onChange={setA260} placeholder="e.g. 0.42" />
+        <InputField label="Dilution factor" value={dilution} onChange={setDilution} placeholder="1" hint="1 = undiluted" />
       </div>
 
-      <p style={{ marginTop: 14, fontSize: 13, opacity: 0.7 }}>
-        Formula: concentration (µg/mL) = A260 × factor × dilution. Factor used:{" "}
-        {result.factor} µg/mL per A260.
-      </p>
-    </main>
+      <SectionDivider label="Concentration" />
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <OutputField label="Concentration" value={isFinite(concUgMl) ? fmt(concUgMl) : "—"} unit={isFinite(concUgMl) ? "µg/mL" : undefined} />
+        <OutputField label="Concentration" value={isFinite(concNgUl) ? fmt(concNgUl) : "—"} unit={isFinite(concNgUl) ? "ng/µL" : undefined} />
+      </div>
+
+      <SectionDivider label="Purity Ratios (optional)" />
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <InputField label="A280 absorbance" value={a280} onChange={setA280} placeholder="optional" />
+        <InputField label="A230 absorbance" value={a230} onChange={setA230} placeholder="optional" />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <OutputField
+          label="260 / 280 ratio"
+          value={isFinite(ratio260_280) ? fmt(ratio260_280, 3) : "—"}
+          warning={purityHint && ratio260_280 < 1.8 ? purityHint : undefined}
+          secondary={purityHint && ratio260_280 >= 1.8 ? purityHint : undefined}
+        />
+        <OutputField
+          label="260 / 230 ratio"
+          value={isFinite(ratio260_230) ? fmt(ratio260_230, 3) : "—"}
+          warning={isFinite(ratio260_230) && ratio260_230 < 1.8 ? "Possible organic contamination" : undefined}
+        />
+      </div>
+    </CalcLayout>
   );
 }
-

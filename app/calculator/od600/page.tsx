@@ -1,291 +1,130 @@
 "use client";
+import { useState } from "react";
+import CalcLayout from "@/components/calculator/CalcLayout";
+import { InputField, OutputField, SectionDivider } from "@/components/calculator/Field";
+import { fmt, parse, isPos } from "@/lib/fmt";
 
-import { useMemo, useState } from "react";
-
-type Preset = "ecoli" | "yeast" | "custom";
-type VolUnit = "µL" | "mL" | "L";
-
-const VOL_TO_ML: Record<VolUnit, number> = {
-  "µL": 1e-3,
-  mL: 1,
-  L: 1e3,
-};
-
-// cells/mL per OD600=1 (rough defaults; user can override)
-const PRESET_FACTOR: Record<Exclude<Preset, "custom">, number> = {
-  ecoli: 8e8,
-  yeast: 3e7,
-};
-
-function fmt(x: number, maxFrac = 4) {
-  if (!Number.isFinite(x)) return "—";
-  const ax = Math.abs(x);
-  // avoid scientific notation for normal lab ranges
-  if ((ax !== 0 && ax < 1e-6) || ax >= 1e12) return x.toExponential(4);
-  return x.toLocaleString(undefined, { maximumFractionDigits: maxFrac });
-}
+const PRESETS = [
+  { label: "E. coli", factor: 8e8  },
+  { label: "Yeast",   factor: 3e7  },
+  { label: "Custom",  factor: null },
+];
+const VOL_UNITS = ["mL", "L", "µL"];
+const VOL_FACTOR: Record<string, number> = { mL: 1e-3, L: 1, µL: 1e-6 };
 
 export default function OD600Page() {
-  const [mode, setMode] = useState<"estimate" | "dilute">("estimate");
+  const [mode, setMode] = useState<"od_to_cells" | "dilution">("od_to_cells");
+  const [preset, setPreset] = useState("E. coli");
+  const [customFactor, setCustomFactor] = useState("");
+  const [od, setOd]               = useState("");
+  const [dilution, setDilution]   = useState("1");
+  const [sampleVol, setSampleVol] = useState(""); const [sampleVolU, setSampleVolU] = useState("mL");
+  const [currentOd, setCurrentOd] = useState("");
+  const [targetOd, setTargetOd]   = useState("");
+  const [finalVol, setFinalVol]   = useState(""); const [finalVolU, setFinalVolU]   = useState("mL");
 
-  // Mode A: Estimate cells/mL
-  const [preset, setPreset] = useState<Preset>("ecoli");
-  const [od, setOd] = useState(0.6);
-  const [dilution, setDilution] = useState(1); // 1 = undiluted, 10 = 1:10, etc.
-  const [customFactor, setCustomFactor] = useState(8e8);
+  function reset() {
+    setOd(""); setDilution("1"); setSampleVol("");
+    setCurrentOd(""); setTargetOd(""); setFinalVol("");
+  }
 
-  // Optional: total cells in sample
-  const [showTotal, setShowTotal] = useState(true);
-  const [sampleVol, setSampleVol] = useState(1);
-  const [sampleVolUnit, setSampleVolUnit] = useState<VolUnit>("mL");
+  const presetData = PRESETS.find(p => p.label === preset)!;
+  const factor = presetData.factor ?? parse(customFactor);
 
-  // Mode B: Dilute to target OD (OD1 * V1 = OD2 * V2)
-  const [odCurrent, setOdCurrent] = useState(2.0);
-  const [odTarget, setOdTarget] = useState(0.5);
-  const [finalVol, setFinalVol] = useState(50);
-  const [finalVolUnit, setFinalVolUnit] = useState<VolUnit>("mL");
+  const odV  = parse(od);
+  const dilV = parse(dilution);
+  const cellsPerMl = isPos(odV) && isFinite(factor) && isPos(dilV) ? odV * factor * dilV : NaN;
+  const sVolV = parse(sampleVol);
+  const totalCellsCalc = isPos(sVolV) && isFinite(cellsPerMl)
+    ? cellsPerMl * sVolV * (VOL_FACTOR[sampleVolU] / VOL_FACTOR["mL"]) : NaN;
 
-  const factor = useMemo(() => {
-    if (preset === "custom") return Number(customFactor) || 0;
-    return PRESET_FACTOR[preset];
-  }, [preset, customFactor]);
+  const c1 = parse(currentOd), c2 = parse(targetOd), v2 = parse(finalVol);
+  const v1 = isPos(c1) && isPos(c2) && isPos(v2) ? (c2 * v2) / c1 : NaN;
+  const diluentVol = isFinite(v1) ? v2 - v1 : NaN;
 
-  const estimate = useMemo(() => {
-    const OD = Number(od) || 0;
-    const D = Number(dilution) || 0;
-    const k = Number(factor) || 0;
-
-    if (OD <= 0 || D <= 0 || k <= 0) return null;
-
-    const odCorrected = OD * D;
-    const cellsPerML = odCorrected * k;
-
-    const vML = (Number(sampleVol) || 0) * VOL_TO_ML[sampleVolUnit];
-    const totalCells = vML > 0 ? cellsPerML * vML : 0;
-
-    return { odCorrected, cellsPerML, totalCells };
-  }, [od, dilution, factor, sampleVol, sampleVolUnit]);
-
-  const dilutionPlan = useMemo(() => {
-    const OD1 = Number(odCurrent) || 0;
-    const OD2 = Number(odTarget) || 0;
-    const V2_ml = (Number(finalVol) || 0) * VOL_TO_ML[finalVolUnit];
-
-    if (OD1 <= 0 || OD2 <= 0 || V2_ml <= 0) return null;
-
-    const V1_ml = (OD2 * V2_ml) / OD1;
-    const media_ml = V2_ml - V1_ml;
-
-    return { V1_ml, media_ml, V2_ml };
-  }, [odCurrent, odTarget, finalVol, finalVolUnit]);
+  let copyText = "";
+  if (mode === "od_to_cells" && isFinite(cellsPerMl)) {
+    copyText = `OD600=${od} (dilution ${dilution}×) → ${fmt(cellsPerMl)} cells/mL`;
+    if (isFinite(totalCellsCalc)) copyText += `\nTotal cells (${sampleVol} ${sampleVolU}): ${fmt(totalCellsCalc)}`;
+  } else if (mode === "dilution" && isFinite(v1)) {
+    copyText = `Culture: ${fmt(v1)} ${finalVolU} → add ${fmt(diluentVol)} ${finalVolU} media`;
+  }
 
   return (
-    <main style={{ padding: 24, maxWidth: 900 }}>
-      <h1>OD600</h1>
-      <p style={{ opacity: 0.8 }}>
-        Estimate cell concentration from OD600, or calculate how to dilute a culture to a target OD.
-      </p>
-
-      <div style={{ marginTop: 12 }}>
-        <label>
-          <input
-            type="radio"
-            checked={mode === "estimate"}
-            onChange={() => setMode("estimate")}
-          />{" "}
-          Estimate cells/mL
-        </label>
-        <br />
-        <label>
-          <input
-            type="radio"
-            checked={mode === "dilute"}
-            onChange={() => setMode("dilute")}
-          />{" "}
-          Dilute to target OD (OD₁·V₁ = OD₂·V₂)
-        </label>
+    <CalcLayout
+      title="OD600 Calculator"
+      description="Convert optical density to cell count, or plan dilutions for target density."
+      onReset={reset}
+      copyText={copyText || undefined}
+      tips={
+        <div className="space-y-1.5">
+          <p><strong>Formula:</strong> Cells/mL = OD600 × conversion factor × dilution</p>
+          <p>E. coli at OD600=1: ~8×10⁸ cells/mL. Yeast at OD600=1: ~3×10⁷ cells/mL.</p>
+          <p><strong>Dilution planning</strong> uses C₁V₁ = C₂V₂ with OD as concentration proxy.</p>
+          <p><strong>Tip:</strong> Keep OD readings below 0.4 for linearity.</p>
+        </div>
+      }
+    >
+      <div className="space-y-1">
+        <label className="block text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Organism Preset</label>
+        <div className="flex flex-wrap gap-2">
+          {PRESETS.map(p => (
+            <button key={p.label} onClick={() => setPreset(p.label)}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+              style={{ background: preset === p.label ? "var(--accent)" : "var(--bg)", color: preset === p.label ? "#fff" : "var(--text-muted)", border: "1px solid var(--border)" }}>
+              {p.label} {p.factor !== null ? `(${p.factor.toExponential(0)}/mL)` : ""}
+            </button>
+          ))}
+        </div>
+        {preset === "Custom" && (
+          <InputField label="Conversion factor (cells/mL per OD)" value={customFactor} onChange={setCustomFactor} placeholder="e.g. 8e8" />
+        )}
       </div>
 
-      {mode === "estimate" ? (
+      <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: "var(--border)" }}>
+        {(["od_to_cells", "dilution"] as const).map(m => (
+          <button key={m} onClick={() => setMode(m)}
+            className="flex-1 py-2 text-sm font-medium transition-colors"
+            style={{ background: mode === m ? "var(--accent)" : "var(--bg)", color: mode === m ? "#fff" : "var(--text-muted)" }}>
+            {m === "od_to_cells" ? "OD → Cells/mL" : "Dilution Planning"}
+          </button>
+        ))}
+      </div>
+
+      {mode === "od_to_cells" && (
         <>
-          <div style={{ display: "grid", gap: 12, marginTop: 18 }}>
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <label style={{ width: 180 }}>Preset</label>
-              <select value={preset} onChange={(e) => setPreset(e.target.value as Preset)}>
-                <option value="ecoli">E. coli (default)</option>
-                <option value="yeast">Yeast (S. cerevisiae)</option>
-                <option value="custom">Custom factor</option>
-              </select>
-              <span style={{ opacity: 0.75 }}>
-                (cells/mL per OD=1)
-              </span>
-            </div>
-
-            {preset === "custom" ? (
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <label style={{ width: 180 }}>Factor (cells/mL per OD)</label>
-                <input
-                  type="number"
-                  value={customFactor}
-                  onChange={(e) => setCustomFactor(Number(e.target.value))}
-                  style={{ padding: 8, width: 220 }}
-                />
-              </div>
-            ) : (
-              <div style={{ opacity: 0.85 }}>
-                Using factor: <strong>{fmt(factor, 0)}</strong> cells/mL per OD600=1
-              </div>
-            )}
-
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <label style={{ width: 180 }}>OD600 reading</label>
-              <input
-                type="number"
-                value={od}
-                onChange={(e) => setOd(Number(e.target.value))}
-                style={{ padding: 8, width: 160 }}
-              />
-            </div>
-
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <label style={{ width: 180 }}>Dilution factor</label>
-              <input
-                type="number"
-                value={dilution}
-                onChange={(e) => setDilution(Number(e.target.value))}
-                style={{ padding: 8, width: 160 }}
-              />
-              <span style={{ opacity: 0.75 }}>1 = undiluted, 10 = 1:10, etc.</span>
-            </div>
-
-            <div style={{ marginTop: 4 }}>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={showTotal}
-                  onChange={(e) => setShowTotal(e.target.checked)}
-                />{" "}
-                Also calculate total cells in a sample volume
-              </label>
-            </div>
-
-            {showTotal ? (
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <label style={{ width: 180 }}>Sample volume</label>
-                <input
-                  type="number"
-                  value={sampleVol}
-                  onChange={(e) => setSampleVol(Number(e.target.value))}
-                  style={{ padding: 8, width: 160 }}
-                />
-                <select
-                  value={sampleVolUnit}
-                  onChange={(e) => setSampleVolUnit(e.target.value as VolUnit)}
-                >
-                  <option value="µL">µL</option>
-                  <option value="mL">mL</option>
-                  <option value="L">L</option>
-                </select>
-              </div>
-            ) : null}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <InputField label="OD600 reading" value={od} onChange={setOd} placeholder="e.g. 0.6" />
+            <InputField label="Sample dilution" value={dilution} onChange={setDilution} placeholder="1" hint="1 = undiluted" />
           </div>
-
-          <div style={{ marginTop: 18 }}>
-            {!estimate ? (
-              <p>Enter valid values to see results.</p>
-            ) : (
-              <>
-                <div>
-                  <strong>Corrected OD600:</strong> {fmt(estimate.odCorrected, 4)}
-                </div>
-                <div style={{ marginTop: 6 }}>
-                  <strong>Estimated concentration:</strong>{" "}
-                  {fmt(estimate.cellsPerML, 0)} cells/mL
-                </div>
-
-                {showTotal ? (
-                  <div style={{ marginTop: 6 }}>
-                    <strong>Total cells in sample:</strong>{" "}
-                    {fmt(estimate.totalCells, 0)} cells
-                  </div>
-                ) : null}
-              </>
-            )}
-          </div>
-
-          <p style={{ marginTop: 14, fontSize: 13, opacity: 0.7 }}>
-            Note: OD→cells/mL is an estimate and varies by strain, instrument/path length, media, and growth phase.
-            Use your lab’s calibration curve if available.
-          </p>
-        </>
-      ) : (
-        <>
-          <div style={{ display: "grid", gap: 12, marginTop: 18 }}>
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <label style={{ width: 200 }}>Current OD (OD₁)</label>
-              <input
-                type="number"
-                value={odCurrent}
-                onChange={(e) => setOdCurrent(Number(e.target.value))}
-                style={{ padding: 8, width: 160 }}
-              />
-            </div>
-
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <label style={{ width: 200 }}>Target OD (OD₂)</label>
-              <input
-                type="number"
-                value={odTarget}
-                onChange={(e) => setOdTarget(Number(e.target.value))}
-                style={{ padding: 8, width: 160 }}
-              />
-            </div>
-
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <label style={{ width: 200 }}>Final volume (V₂)</label>
-              <input
-                type="number"
-                value={finalVol}
-                onChange={(e) => setFinalVol(Number(e.target.value))}
-                style={{ padding: 8, width: 160 }}
-              />
-              <select
-                value={finalVolUnit}
-                onChange={(e) => setFinalVolUnit(e.target.value as VolUnit)}
-              >
-                <option value="µL">µL</option>
-                <option value="mL">mL</option>
-                <option value="L">L</option>
-              </select>
-            </div>
-          </div>
-
-          <div style={{ marginTop: 18 }}>
-            {!dilutionPlan ? (
-              <p>Enter valid values to see the dilution plan.</p>
-            ) : (
-              <>
-                <div>
-                  <strong>Add culture (V₁):</strong> {fmt(dilutionPlan.V1_ml, 3)} mL
-                </div>
-                <div style={{ marginTop: 6 }}>
-                  <strong>Add media:</strong> {fmt(dilutionPlan.media_ml, 3)} mL
-                </div>
-                {dilutionPlan.V1_ml > dilutionPlan.V2_ml ? (
-                  <p style={{ marginTop: 10, color: "crimson" }}>
-                    Warning: V₁ is larger than V₂. Current OD is too low to reach target.
-                  </p>
-                ) : null}
-              </>
-            )}
-          </div>
-
-          <p style={{ marginTop: 14, fontSize: 13, opacity: 0.7 }}>
-            Tip: This is the same math as C1V1=C2V2, using OD as “concentration”.
-          </p>
+          <InputField label="Sample volume (optional, for total cells)" value={sampleVol} onChange={setSampleVol}
+            unit={sampleVolU} unitOptions={VOL_UNITS} onUnitChange={setSampleVolU} />
+          <SectionDivider label="Results" />
+          <OutputField label="Cells / mL" value={isFinite(cellsPerMl) ? fmt(cellsPerMl) : "—"} unit={isFinite(cellsPerMl) ? "cells/mL" : undefined} />
+          {isFinite(totalCellsCalc) && (
+            <OutputField label="Total cells" value={fmt(totalCellsCalc)} unit="cells" />
+          )}
         </>
       )}
-    </main>
+
+      {mode === "dilution" && (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <InputField label="Current OD600" value={currentOd} onChange={setCurrentOd} placeholder="e.g. 1.2" />
+            <InputField label="Target OD600" value={targetOd} onChange={setTargetOd} placeholder="e.g. 0.1" />
+          </div>
+          <InputField label="Final volume" value={finalVol} onChange={setFinalVol}
+            unit={finalVolU} unitOptions={VOL_UNITS} onUnitChange={setFinalVolU} />
+          {parse(targetOd) >= parse(currentOd) && isPos(parse(targetOd)) && isPos(parse(currentOd)) && (
+            <p className="text-xs" style={{ color: "#f59e0b" }}>⚠ Target OD ≥ current OD — cannot dilute to reach this density.</p>
+          )}
+          <SectionDivider label="Results" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <OutputField label="Culture to add" value={isFinite(v1) && v1 > 0 ? fmt(v1) : "—"} unit={isFinite(v1) ? finalVolU : undefined} />
+            <OutputField label="Media to add" value={isFinite(diluentVol) && diluentVol >= 0 ? fmt(diluentVol) : "—"} unit={isFinite(diluentVol) && diluentVol >= 0 ? finalVolU : undefined} />
+          </div>
+        </>
+      )}
+    </CalcLayout>
   );
 }
-

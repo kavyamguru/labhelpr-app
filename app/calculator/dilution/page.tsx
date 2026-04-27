@@ -1,137 +1,71 @@
 "use client";
+import { useState } from "react";
+import CalcLayout from "@/components/calculator/CalcLayout";
+import { InputField, OutputField, SectionDivider } from "@/components/calculator/Field";
+import { fmt, parse, isPos } from "@/lib/fmt";
 
-import { useMemo, useState } from "react";
-
-type Unit = "nM" | "µM" | "mM" | "M";
-
-const FACTORS: Record<Unit, number> = {
-  nM: 1e-9,
-  "µM": 1e-6,
-  mM: 1e-3,
-  M: 1,
-};
-
-function toBase(value: number, unit: Unit) {
-  return value * FACTORS[unit];
-}
-
-function fromBase(value: number, unit: Unit) {
-  return value / FACTORS[unit];
-}
+const CONC_UNITS = ["M", "mM", "µM", "nM", "mg/mL", "µg/mL", "ng/µL", "ng/mL", "% (v/v)", "x"];
+const VOL_UNITS  = ["mL", "µL", "L"];
 
 export default function DilutionPage() {
-  // C1 * V1 = C2 * V2
-  const [c1, setC1] = useState(10);
-  const [c1Unit, setC1Unit] = useState<Unit>("mM");
+  const [c1, setC1] = useState("");   const [c1u, setC1u] = useState("mM");
+  const [c2, setC2] = useState("");   const [c2u, setC2u] = useState("mM");
+  const [v2, setV2] = useState("");   const [v2u, setV2u] = useState("mL");
+  const [v1u, setV1u] = useState("mL");
 
-  const [c2, setC2] = useState(250);
-  const [c2Unit, setC2Unit] = useState<Unit>("µM");
+  function reset() { setC1(""); setC2(""); setV2(""); }
 
-  const [v2, setV2] = useState(1000);
-  const [v2Unit, setV2Unit] = useState<"µL" | "mL">("µL");
+  const c1v = parse(c1), c2v = parse(c2), v2v = parse(v2);
+  const valid = isPos(c1v) && isPos(c2v) && isPos(v2v);
+  const v1 = valid ? (c2v * v2v) / c1v : NaN;
+  const diluent = valid ? v2v - v1 : NaN;
+  const warn = valid && v1 > v2v ? "V1 > V2: check your concentrations." : undefined;
+  const warnNeg = valid && diluent < 0 ? "Diluent volume is negative — stock is too dilute." : undefined;
 
-  const { v1Value, v1UnitLabel, diluentValue, diluentUnitLabel } = useMemo(() => {
-    // Convert concentrations to M
-    const C1 = toBase(Number(c1) || 0, c1Unit);
-    const C2 = toBase(Number(c2) || 0, c2Unit);
-
-    // Convert V2 to liters
-    const V2_L = (Number(v2) || 0) * (v2Unit === "µL" ? 1e-6 : 1e-3);
-
-    // V1 = (C2 * V2) / C1
-    const V1_L = C1 === 0 ? 0 : (C2 * V2_L) / C1;
-
-    // Diluent = V2 - V1
-    const diluent_L = Math.max(0, V2_L - V1_L);
-
-    // Display results in chosen V2 unit
-    const displayFactor = v2Unit === "µL" ? 1e6 : 1e3;
-    const unitLabel = v2Unit;
-
-    return {
-      v1Value: V1_L * displayFactor,
-      v1UnitLabel: unitLabel,
-      diluentValue: diluent_L * displayFactor,
-      diluentUnitLabel: unitLabel,
-    };
-  }, [c1, c1Unit, c2, c2Unit, v2, v2Unit]);
+  const copyText = valid
+    ? `Stock volume (V1): ${fmt(v1)} ${v1u}\nDiluent volume: ${fmt(diluent)} ${v2u}\nC1=${c1}${c1u}, C2=${c2}${c2u}, V2=${v2}${v2u}`
+    : "";
 
   return (
-    <main style={{ padding: 24, maxWidth: 700 }}>
-      <h1>Dilution Calculator</h1>
-      <p style={{ opacity: 0.8 }}>
-        Uses <strong>C1 × V1 = C2 × V2</strong> to compute how much stock (V1) and diluent to add.
-      </p>
-
-      <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ width: 90 }}>Stock (C1)</label>
-          <input
-            type="number"
-            value={c1}
-            onChange={(e) => setC1(Number(e.target.value))}
-            style={{ padding: 8, width: 140 }}
-          />
-          <select value={c1Unit} onChange={(e) => setC1Unit(e.target.value as Unit)}>
-            {Object.keys(FACTORS).map((u) => (
-              <option key={u} value={u}>
-                {u}
-              </option>
-            ))}
-          </select>
+    <CalcLayout
+      title="Dilution Calculator"
+      description="Find stock and diluent volumes using C₁V₁ = C₂V₂."
+      onReset={reset}
+      copyText={valid ? copyText : undefined}
+      tips={
+        <div className="space-y-1.5">
+          <p><strong>Formula:</strong> C₁ × V₁ = C₂ × V₂</p>
+          <p><strong>V1</strong> = stock volume to take. <strong>Diluent</strong> = V₂ − V₁.</p>
+          <p>Keep concentration units consistent. Unit labels are for reference only.</p>
+          <p><strong>Tip:</strong> If C₂ ≥ C₁, you need more stock than final volume — check your numbers.</p>
         </div>
+      }
+    >
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <InputField label="Stock concentration (C1)" value={c1} onChange={setC1}
+          unit={c1u} unitOptions={CONC_UNITS} onUnitChange={setC1u} />
+        <InputField label="Target concentration (C2)" value={c2} onChange={setC2}
+          unit={c2u} unitOptions={CONC_UNITS} onUnitChange={setC2u} />
+      </div>
+      <InputField label="Final volume (V2)" value={v2} onChange={setV2}
+        unit={v2u} unitOptions={VOL_UNITS} onUnitChange={setV2u} />
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ width: 90 }}>Target (C2)</label>
-          <input
-            type="number"
-            value={c2}
-            onChange={(e) => setC2(Number(e.target.value))}
-            style={{ padding: 8, width: 140 }}
-          />
-          <select value={c2Unit} onChange={(e) => setC2Unit(e.target.value as Unit)}>
-            {Object.keys(FACTORS).map((u) => (
-              <option key={u} value={u}>
-                {u}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ width: 90 }}>Final (V2)</label>
-          <input
-            type="number"
-            value={v2}
-            onChange={(e) => setV2(Number(e.target.value))}
-            style={{ padding: 8, width: 140 }}
-          />
-          <select value={v2Unit} onChange={(e) => setV2Unit(e.target.value as "µL" | "mL")}>
-            <option value="µL">µL</option>
-            <option value="mL">mL</option>
-          </select>
-        </div>
+      <SectionDivider label="Results" />
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <OutputField label="Stock volume (V1)" value={valid ? fmt(v1) : "—"}
+          unit={valid ? v1u : undefined} warning={warn} />
+        <OutputField label="Diluent volume (V2 − V1)" value={valid && diluent >= 0 ? fmt(diluent) : "—"}
+          unit={valid && diluent >= 0 ? v2u : undefined} warning={warnNeg} />
       </div>
 
-      <div style={{ marginTop: 20 }}>
-        <div>
-          <strong>Take (V1):</strong>{" "}
-          {Number.isFinite(v1Value) ? v1Value.toLocaleString(undefined, { maximumFractionDigits: 4 }) : "—"}{" "}
-          {v1UnitLabel}
+      {valid && !warn && (
+        <div className="rounded-lg p-3 text-center" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>Dilution ratio</p>
+          <p className="font-mono font-semibold text-sm" style={{ color: "var(--output-text)" }}>
+            1 : {fmt(c1v / c2v, 3)}
+          </p>
         </div>
-        <div style={{ marginTop: 6 }}>
-          <strong>Add diluent:</strong>{" "}
-          {Number.isFinite(diluentValue)
-            ? diluentValue.toLocaleString(undefined, { maximumFractionDigits: 4 })
-            : "—"}{" "}
-          {diluentUnitLabel}
-        </div>
-      </div>
-
-      <p style={{ marginTop: 16, fontSize: 13, opacity: 0.7 }}>
-        Tip: If V1 is larger than V2, your stock is too dilute to reach that target.
-      </p>
-    </main>
+      )}
+    </CalcLayout>
   );
 }
-

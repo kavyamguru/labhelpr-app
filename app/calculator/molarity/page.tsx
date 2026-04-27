@@ -1,238 +1,117 @@
 "use client";
+import { useState } from "react";
+import CalcLayout from "@/components/calculator/CalcLayout";
+import { InputField, OutputField, SectionDivider } from "@/components/calculator/Field";
+import { fmt, parse, isPos } from "@/lib/fmt";
 
-import { useMemo, useState } from "react";
-import { molecularWeightFromFormula } from "../../../lib/lab/molecularWeight";
+type Mode = "mass_needed" | "conc_from_mass";
 
-type VolUnit = "µL" | "mL" | "L";
-const VOL_TO_L: Record<VolUnit, number> = {
-  "µL": 1e-6,
-  mL: 1e-3,
-  L: 1,
-};
+const VOL_UNITS  = ["mL", "L", "µL"];
+const CONC_UNITS = ["M", "mM", "µM", "nM"];
+const MASS_UNITS = ["g", "mg", "µg"];
 
-type ConcUnit = "nM" | "µM" | "mM" | "M";
-const CONC_TO_M: Record<ConcUnit, number> = {
-  nM: 1e-9,
-  "µM": 1e-6,
-  mM: 1e-3,
-  M: 1,
-};
-
-function fmt(x: number, maxFrac = 6) {
-  if (!Number.isFinite(x)) return "—";
-  const ax = Math.abs(x);
-  if ((ax !== 0 && ax < 1e-6) || ax >= 1e9) return x.toExponential(4);
-  return x.toLocaleString(undefined, { maximumFractionDigits: maxFrac });
-}
-
-// Convert from M (mol/L) into a chosen concentration unit
-function fromM(valueM: number, unit: ConcUnit) {
-  return valueM / CONC_TO_M[unit];
-}
+const VOL_FACTOR:  Record<string, number> = { L: 1, mL: 1e-3, µL: 1e-6 };
+const CONC_FACTOR: Record<string, number> = { M: 1, mM: 1e-3, µM: 1e-6, nM: 1e-9 };
+const MASS_FACTOR: Record<string, number> = { g: 1, mg: 1e-3, µg: 1e-6 };
 
 export default function MolarityPage() {
-  const [mode, setMode] = useState<"mass-needed" | "conc-from-mass">("mass-needed");
+  const [mode, setMode] = useState<Mode>("mass_needed");
+  const [m1mol, setM1mol] = useState(""); const [m1molu, setM1molu] = useState("mM");
+  const [m1vol, setM1vol] = useState(""); const [m1volu, setM1volu] = useState("mL");
+  const [m1mw, setM1mw]   = useState("");
+  const [m2mass, setM2mass] = useState(""); const [m2massu, setM2massu] = useState("mg");
+  const [m2vol, setM2vol]   = useState(""); const [m2volu, setM2volu]   = useState("mL");
+  const [m2mw, setM2mw]     = useState("");
 
-  // Inputs (independent)
-  const [formula, setFormula] = useState<string>("");  // optional
-  const [mwManual, setMwManual] = useState<number>(0); // optional, no auto-fill
+  function reset() {
+    setM1mol(""); setM1vol(""); setM1mw("");
+    setM2mass(""); setM2vol(""); setM2mw("");
+  }
 
-  // Common inputs
-  const [vol, setVol] = useState<number>(1);
-  const [volUnit, setVolUnit] = useState<VolUnit>("L");
+  const mol1    = parse(m1mol);
+  const vol1    = parse(m1vol);
+  const mw1     = parse(m1mw);
+  const molBase = isPos(mol1) ? mol1 * CONC_FACTOR[m1molu] : NaN;
+  const volBase1 = isPos(vol1) ? vol1 * VOL_FACTOR[m1volu] : NaN;
+  const mwVal1   = isPos(mw1) ? mw1 : 0;
+  const gramsNeeded = isFinite(molBase) && isFinite(volBase1) ? molBase * volBase1 * mwVal1 : NaN;
+  const mgNeeded = gramsNeeded * 1e3;
 
-  // Mode A: mass needed
-  const [targetConc, setTargetConc] = useState<number>(150);
-  const [targetConcUnit, setTargetConcUnit] = useState<ConcUnit>("mM");
+  const mass2    = parse(m2mass);
+  const vol2     = parse(m2vol);
+  const mw2      = parse(m2mw);
+  const massBase = isPos(mass2) ? mass2 * MASS_FACTOR[m2massu] : NaN;
+  const volBase2 = isPos(vol2)  ? vol2  * VOL_FACTOR[m2volu]   : NaN;
+  const mwVal2   = isPos(mw2) ? mw2 : 0;
+  const molarityM = (isFinite(massBase) && isFinite(volBase2) && mwVal2 > 0) ? (massBase / mwVal2) / volBase2 : NaN;
+  const molaritymM = molarityM * 1e3;
 
-  // Mode B: concentration from mass
-  const [massG, setMassG] = useState<number>(1);
-  const [outConcUnit, setOutConcUnit] = useState<ConcUnit>("mM");
-
-  // Compute MW from formula (only if formula entered)
-  const mwFromFormula = useMemo(() => {
-    const f = formula.trim();
-    if (!f) return null;
-    return molecularWeightFromFormula(f);
-  }, [formula]);
-
-  // Decide MW:
-  // - if manual MW > 0 => use it
-  // - else if formula valid => use computed MW
-  // - else 0
-  const MW = useMemo(() => {
-    const manual = Number(mwManual) || 0;
-    if (manual > 0) return manual;
-    if (mwFromFormula && mwFromFormula.ok) return mwFromFormula.mw_g_per_mol;
-    return 0;
-  }, [mwManual, mwFromFormula]);
-
-  const result = useMemo(() => {
-    const V_L = (Number(vol) || 0) * VOL_TO_L[volUnit];
-
-    // Avoid nonsense results when MW/volume missing
-    if (MW <= 0 || V_L <= 0) {
-      return { grams: NaN, molarity_M: NaN };
-    }
-
-    if (mode === "mass-needed") {
-      const C_M = (Number(targetConc) || 0) * CONC_TO_M[targetConcUnit]; // mol/L
-      const grams = C_M * V_L * MW;
-      return { grams, molarity_M: NaN };
-    } else {
-      const grams = Number(massG) || 0;
-      const molarity_M = (grams / MW) / V_L;
-      return { grams: NaN, molarity_M };
-    }
-  }, [mode, MW, vol, volUnit, targetConc, targetConcUnit, massG]);
+  let copyText = "";
+  if (mode === "mass_needed" && isFinite(gramsNeeded)) {
+    copyText = `Mass needed: ${fmt(gramsNeeded)} g (${fmt(mgNeeded)} mg)\nFor ${m1mol} ${m1molu}, ${m1vol} ${m1volu}, MW=${m1mw || "not set"}`;
+  } else if (mode === "conc_from_mass" && isFinite(molarityM)) {
+    copyText = `Concentration: ${fmt(molarityM)} M (${fmt(molaritymM)} mM)`;
+  }
 
   return (
-    <main style={{ padding: 24, maxWidth: 780 }}>
-      <h1>Molarity Calculator</h1>
-      <p style={{ opacity: 0.8 }}>
-        Calculate grams needed for a solution, or calculate concentration from a weighed mass.
-      </p>
-
-      <div style={{ marginTop: 12 }}>
-        <label>
-          <input
-            type="radio"
-            checked={mode === "mass-needed"}
-            onChange={() => setMode("mass-needed")}
-          />{" "}
-          Mass needed (given M, V, MW)
-        </label>
-        <br />
-        <label>
-          <input
-            type="radio"
-            checked={mode === "conc-from-mass"}
-            onChange={() => setMode("conc-from-mass")}
-          />{" "}
-          Concentration from mass (given g, V, MW)
-        </label>
+    <CalcLayout
+      title="Molarity Calculator"
+      description="Calculate mass to weigh out or the concentration of a solution."
+      onReset={reset}
+      copyText={copyText || undefined}
+      tips={
+        <div className="space-y-1.5">
+          <p><strong>Mode 1 — Mass needed:</strong> g = M × V(L) × MW(g/mol)</p>
+          <p><strong>Mode 2 — Concentration:</strong> M = [mass(g) / MW] / V(L)</p>
+          <p>Enter MW manually. If MW is 0 or blank, mass output = 0.</p>
+          <p><strong>Tip:</strong> Use the Molecular Weight calculator to get MW from a formula.</p>
+        </div>
+      }
+    >
+      <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: "var(--border)" }}>
+        {(["mass_needed", "conc_from_mass"] as Mode[]).map(m => (
+          <button key={m} onClick={() => setMode(m)}
+            className="flex-1 py-2 text-sm font-medium transition-colors"
+            style={{ background: mode === m ? "var(--accent)" : "var(--bg)", color: mode === m ? "#fff" : "var(--text-muted)" }}>
+            {m === "mass_needed" ? "Mass needed" : "Conc. from mass"}
+          </button>
+        ))}
       </div>
 
-      <div style={{ display: "grid", gap: 12, marginTop: 18 }}>
-        {/* Formula + inline computed MW */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ width: 170 }}>Formula (optional)</label>
-
-          <input
-            value={formula}
-            onChange={(e) => setFormula(e.target.value)}
-            placeholder="e.g., NaCl, Ca(OH)2, MgSO4·7H2O"
-            style={{ padding: 8, width: 260 }}
-          />
-
-          {formula.trim() && mwFromFormula && mwFromFormula.ok && (
-            <span style={{ fontSize: 12, opacity: 0.7 }}>
-              MW: <strong>{fmt(mwFromFormula.mw_g_per_mol, 4)}</strong> g/mol
-            </span>
-          )}
-
-          {formula.trim() && mwFromFormula && !mwFromFormula.ok && (
-            <span style={{ color: "crimson", fontSize: 12 }}>
-              <strong>Error:</strong> {mwFromFormula.error}
-            </span>
-          )}
-        </div>
-
-        {/* Manual MW input */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ width: 170 }}>Molecular weight (g/mol)</label>
-          <input
-            type="number"
-            value={mwManual}
-            onChange={(e) => setMwManual(Number(e.target.value))}
-            placeholder="Enter MW if known"
-            style={{ padding: 8, width: 160 }}
-            min={0}
-          />
-          <span style={{ fontSize: 12, opacity: 0.7 }}>
-            If MW is 0, we’ll use MW from formula (if valid).
-          </span>
-        </div>
-
-        {/* Volume */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ width: 170 }}>Final volume (V)</label>
-          <input
-            type="number"
-            value={vol}
-            onChange={(e) => setVol(Number(e.target.value))}
-            style={{ padding: 8, width: 160 }}
-          />
-          <select value={volUnit} onChange={(e) => setVolUnit(e.target.value as VolUnit)}>
-            <option value="µL">µL</option>
-            <option value="mL">mL</option>
-            <option value="L">L</option>
-          </select>
-        </div>
-
-        {/* Mode-specific */}
-        {mode === "mass-needed" ? (
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <label style={{ width: 170 }}>Target concentration (C)</label>
-            <input
-              type="number"
-              value={targetConc}
-              onChange={(e) => setTargetConc(Number(e.target.value))}
-              style={{ padding: 8, width: 160 }}
-            />
-            <select
-              value={targetConcUnit}
-              onChange={(e) => setTargetConcUnit(e.target.value as ConcUnit)}
-            >
-              <option value="nM">nM</option>
-              <option value="µM">µM</option>
-              <option value="mM">mM</option>
-              <option value="M">M</option>
-            </select>
+      {mode === "mass_needed" && (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <InputField label="Target concentration" value={m1mol} onChange={setM1mol}
+              unit={m1molu} unitOptions={CONC_UNITS} onUnitChange={setM1molu} />
+            <InputField label="Final volume" value={m1vol} onChange={setM1vol}
+              unit={m1volu} unitOptions={VOL_UNITS} onUnitChange={setM1volu} />
           </div>
-        ) : (
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <label style={{ width: 170 }}>Mass weighed (g)</label>
-            <input
-              type="number"
-              value={massG}
-              onChange={(e) => setMassG(Number(e.target.value))}
-              style={{ padding: 8, width: 160 }}
-            />
+          <InputField label="Molecular weight (g/mol)" value={m1mw} onChange={setM1mw}
+            placeholder="e.g. 58.44" hint="Leave blank or 0 if unknown — mass output will be 0." />
+          <SectionDivider label="Result" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <OutputField label="Mass to weigh (g)" value={isFinite(gramsNeeded) ? fmt(gramsNeeded) : "—"} unit={isFinite(gramsNeeded) ? "g" : undefined} />
+            <OutputField label="Mass to weigh (mg)" value={isFinite(mgNeeded) ? fmt(mgNeeded) : "—"} unit={isFinite(mgNeeded) ? "mg" : undefined} />
           </div>
-        )}
-      </div>
+        </>
+      )}
 
-      {/* Output */}
-      <div style={{ marginTop: 22 }}>
-        {MW <= 0 ? (
-          <div style={{ color: "crimson" }}>
-            <strong>Enter either a valid formula or a molecular weight to calculate.</strong>
+      {mode === "conc_from_mass" && (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <InputField label="Mass dissolved" value={m2mass} onChange={setM2mass}
+              unit={m2massu} unitOptions={MASS_UNITS} onUnitChange={setM2massu} />
+            <InputField label="Solution volume" value={m2vol} onChange={setM2vol}
+              unit={m2volu} unitOptions={VOL_UNITS} onUnitChange={setM2volu} />
           </div>
-        ) : mode === "mass-needed" ? (
-          <div>
-            <strong>Weigh:</strong> {fmt(result.grams, 6)} g
+          <InputField label="Molecular weight (g/mol)" value={m2mw} onChange={setM2mw} placeholder="e.g. 342.3" />
+          <SectionDivider label="Result" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <OutputField label="Concentration (M)" value={isFinite(molarityM) ? fmt(molarityM) : "—"} unit={isFinite(molarityM) ? "M" : undefined} />
+            <OutputField label="Concentration (mM)" value={isFinite(molaritymM) ? fmt(molaritymM) : "—"} unit={isFinite(molaritymM) ? "mM" : undefined} />
           </div>
-        ) : (
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <strong>Concentration:</strong>
-            <span>
-              {fmt(fromM(result.molarity_M, outConcUnit), 6)} {outConcUnit}
-            </span>
-            <select value={outConcUnit} onChange={(e) => setOutConcUnit(e.target.value as ConcUnit)}>
-              <option value="nM">nM</option>
-              <option value="µM">µM</option>
-              <option value="mM">mM</option>
-              <option value="M">M</option>
-            </select>
-          </div>
-        )}
-      </div>
-
-      <p style={{ marginTop: 14, fontSize: 13, opacity: 0.7 }}>
-        Tip: For buffers/mixtures, MW may be an “effective MW” or you may need component-wise calculations.
-      </p>
-    </main>
+        </>
+      )}
+    </CalcLayout>
   );
 }
-

@@ -1,88 +1,89 @@
 "use client";
-
 import { useState } from "react";
-
-const VOLUME_FACTORS: Record<string, number> = {
-  "µL": 1e-6,
-  "mL": 1e-3,
-  "L": 1,
-};
-
-const CONC_FACTORS: Record<string, number> = {
-  "nM": 1e-9,
-  "µM": 1e-6,
-  "mM": 1e-3,
-  "M": 1,
-};
+import CalcLayout from "@/components/calculator/CalcLayout";
+import { InputField, OutputField, SectionDivider } from "@/components/calculator/Field";
+import { UNIT_GROUPS, convert } from "@/lib/units";
+import { fmt, parse } from "@/lib/fmt";
 
 export default function UnitConversionPage() {
-  const [value, setValue] = useState<number>(1);
-  const [from, setFrom] = useState("µL");
-  const [to, setTo] = useState("mL");
-  const [mode, setMode] = useState<"volume" | "concentration">("volume");
+  const [family, setFamily] = useState("volume");
+  const [value, setValue]   = useState("");
+  const [fromUnit, setFromUnit] = useState("mL");
+  const [toUnit, setToUnit]     = useState("µL");
 
-  const factors = mode === "volume" ? VOLUME_FACTORS : CONC_FACTORS;
-  const result = (value * factors[from]) / factors[to];
+  const group = UNIT_GROUPS.find(g => g.id === family)!;
+
+  function handleFamily(f: string) {
+    const g = UNIT_GROUPS.find(g => g.id === f)!;
+    setFamily(f);
+    setFromUnit(g.units[0].label);
+    setToUnit(g.units[1]?.label ?? g.units[0].label);
+    setValue("");
+  }
+
+  const v = parse(value);
+  const result  = isNaN(v) ? NaN : convert(v, fromUnit, toUnit, family);
+  const reverse = isNaN(v) ? NaN : convert(v, toUnit, fromUnit, family);
+
+  function reset() { setValue(""); }
+
+  const copyText = isFinite(result) ? `${fmt(result)} ${toUnit}` : "";
 
   return (
-    <main style={{ padding: 24, maxWidth: 600 }}>
-      <h1>Unit Conversion</h1>
-
-      <div style={{ marginBottom: 12 }}>
-        <label>
-          <input
-            type="radio"
-            checked={mode === "volume"}
-            onChange={() => {
-              setMode("volume");
-              setFrom("µL");
-              setTo("mL");
-            }}
-          />
-          Volume
-        </label>
-        {"  "}
-        <label>
-          <input
-            type="radio"
-            checked={mode === "concentration"}
-            onChange={() => {
-              setMode("concentration");
-              setFrom("µM");
-              setTo("mM");
-            }}
-          />
-          Concentration
-        </label>
-      </div>
-
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <input
-          type="number"
-          value={value}
-          onChange={(e) => setValue(Number(e.target.value))}
-          style={{ padding: 8, width: 120 }}
-        />
-
-        <select value={from} onChange={(e) => setFrom(e.target.value)}>
-          {Object.keys(factors).map((u) => (
-            <option key={u}>{u}</option>
+    <CalcLayout
+      title="Unit Conversion"
+      description="Convert between laboratory units instantly."
+      onReset={reset}
+      copyText={copyText}
+      tips={
+        <div className="space-y-2">
+          <p><strong>Formula:</strong> result = value × (from_factor / to_factor)</p>
+          <p>All conversions are multiplicative.</p>
+          <p><strong>Tip:</strong> µL for pipetting; mL for tubes; L for culture flasks.</p>
+        </div>
+      }
+    >
+      <div className="space-y-1">
+        <label className="block text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Unit Type</label>
+        <div className="flex flex-wrap gap-2">
+          {UNIT_GROUPS.map(g => (
+            <button key={g.id} onClick={() => handleFamily(g.id)}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+              style={{ background: family === g.id ? "var(--accent)" : "var(--bg)", color: family === g.id ? "#fff" : "var(--text-muted)", border: "1px solid var(--border)" }}>
+              {g.name}
+            </button>
           ))}
-        </select>
-
-        <span>→</span>
-
-        <select value={to} onChange={(e) => setTo(e.target.value)}>
-          {Object.keys(factors).map((u) => (
-            <option key={u}>{u}</option>
-          ))}
-        </select>
+        </div>
       </div>
 
-      <div style={{ marginTop: 16 }}>
-        <strong>Result:</strong> {result.toLocaleString()} {to}
+      <InputField label={`Value (${fromUnit})`} value={value} onChange={setValue} placeholder="e.g. 1.5" />
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-1">
+          <label className="block text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>From</label>
+          <select value={fromUnit} onChange={e => setFromUnit(e.target.value)}
+            className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+            style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)" }}>
+            {group.units.map(u => <option key={u.label} value={u.label}>{u.label}</option>)}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <label className="block text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>To</label>
+          <select value={toUnit} onChange={e => setToUnit(e.target.value)}
+            className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+            style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)" }}>
+            {group.units.map(u => <option key={u.label} value={u.label}>{u.label}</option>)}
+          </select>
+        </div>
       </div>
-    </main>
+
+      <SectionDivider label="Result" />
+      <OutputField label={`${fromUnit} → ${toUnit}`} value={isFinite(result) ? fmt(result) : "—"} unit={isFinite(result) ? toUnit : undefined} />
+      {isFinite(reverse) && (
+        <div className="text-xs text-center" style={{ color: "var(--text-muted)" }}>
+          Reverse: 1 {toUnit} = {fmt(convert(1, toUnit, fromUnit, family))} {fromUnit}
+        </div>
+      )}
+    </CalcLayout>
   );
 }
-

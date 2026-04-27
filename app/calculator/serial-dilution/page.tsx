@@ -1,205 +1,109 @@
 "use client";
+import { useState } from "react";
+import CalcLayout from "@/components/calculator/CalcLayout";
+import { InputField, SectionDivider } from "@/components/calculator/Field";
+import { fmt, parse, isPos } from "@/lib/fmt";
 
-import { useMemo, useState } from "react";
-
-type VolUnit = "µL" | "mL";
-const VOL_TO_UL: Record<VolUnit, number> = { "µL": 1, mL: 1000 };
-
-type ConcUnit = "nM" | "µM" | "mM" | "M";
-const CONC_TO_M: Record<ConcUnit, number> = { nM: 1e-9, "µM": 1e-6, mM: 1e-3, M: 1 };
-
-function fmt(x: number, maxFrac = 4) {
-  if (!Number.isFinite(x)) return "—";
-  const ax = Math.abs(x);
-  // scientific for very small/large
-  if ((ax !== 0 && ax < 1e-6) || ax >= 1e9) return x.toExponential(4);
-  return x.toLocaleString(undefined, { maximumFractionDigits: maxFrac });
-}
-
-function fromMolar(M: number, unit: ConcUnit) {
-  return M / CONC_TO_M[unit];
-}
+const CONC_UNITS = ["M", "mM", "µM", "nM", "pM", "µg/mL", "ng/mL", "cells/mL"];
+const VOL_UNITS  = ["µL", "mL"];
 
 export default function SerialDilutionPage() {
-  const [c0, setC0] = useState(10);
-  const [c0Unit, setC0Unit] = useState<ConcUnit>("mM");
+  const [startConc, setStartConc] = useState(""); const [startConcU, setStartConcU] = useState("mM");
+  const [factor, setFactor]       = useState("10");
+  const [tubes, setTubes]         = useState("8");
+  const [volPerTube, setVolPerTube] = useState("1"); const [volUnit, setVolUnit] = useState("mL");
 
-  // factor = 10 means 1:10 each step
-  const [factor, setFactor] = useState(10);
+  function reset() { setStartConc(""); setFactor("10"); setTubes("8"); setVolPerTube("1"); }
 
-  const [steps, setSteps] = useState(6);
+  const c0  = parse(startConc);
+  const df  = parse(factor);
+  const n   = Math.max(1, Math.min(20, Math.round(parse(tubes) || 8)));
+  const vol = parse(volPerTube);
+  const valid = isPos(c0) && isPos(df) && df > 1 && isPos(vol);
 
-  const [finalVol, setFinalVol] = useState(1000);
-  const [finalVolUnit, setFinalVolUnit] = useState<VolUnit>("µL");
+  const transfer = valid ? vol / df : NaN;
+  const diluent  = valid ? vol - transfer : NaN;
 
-  // NEW: include stock as Tube 0
-  const [includeStock, setIncludeStock] = useState(false);
+  const rows: { tube: number; conc: number }[] = [];
+  if (valid) {
+    for (let i = 0; i < n; i++) rows.push({ tube: i + 1, conc: c0 / Math.pow(df, i + 1) });
+  }
 
-  // Choose a nice pipetting scheme: transfer = finalVol / factor
-  const plan = useMemo(() => {
-    const C0_M = (Number(c0) || 0) * CONC_TO_M[c0Unit];
-    const F = Number(factor) || 0;
-    const N = Math.max(1, Math.floor(Number(steps) || 1));
-
-    const Vfinal_uL = (Number(finalVol) || 0) * VOL_TO_UL[finalVolUnit];
-    if (C0_M <= 0 || F <= 0 || Vfinal_uL <= 0) return null;
-
-    const transfer_uL = Vfinal_uL / F;
-    const diluent_uL = Vfinal_uL - transfer_uL;
-
-    const rows: Array<{ tube: number; conc_M: number; isStock: boolean }> = [];
-
-    // Optional Tube 0
-    if (includeStock) {
-      rows.push({
-        tube: 0,
-        conc_M: C0_M,
-        isStock: true,
-      });
-    }
-
-    // Tubes 1..N are dilutions: C0/F, C0/F^2, ...
-    for (let i = 0; i < N; i++) {
-      const step = i + 1;
-      rows.push({
-        tube: step,
-        conc_M: C0_M / Math.pow(F, step),
-        isStock: false,
-      });
-    }
-
-    return { rows, transfer_uL, diluent_uL, Vfinal_uL, C0_M };
-  }, [c0, c0Unit, factor, steps, finalVol, finalVolUnit, includeStock]);
+  function buildCopyText() {
+    const lines = [`Serial dilution — Start: ${startConc} ${startConcU}, 1:${factor}, ${tubes} tubes`];
+    lines.push(`Transfer: ${fmt(transfer)} ${volUnit} | Diluent: ${fmt(diluent)} ${volUnit}`);
+    rows.forEach(r => lines.push(`Tube ${r.tube}: ${fmt(r.conc)} ${startConcU}`));
+    return lines.join("\n");
+  }
 
   return (
-    <main style={{ padding: 24, maxWidth: 980 }}>
-      <h1>Serial Dilution</h1>
-      <p style={{ opacity: 0.8 }}>
-        Calculates stepwise concentrations and pipetting volumes for a serial dilution series.
-      </p>
-
-      <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ width: 220 }}>Starting concentration (C0)</label>
-          <input
-            type="number"
-            value={c0}
-            onChange={(e) => setC0(Number(e.target.value))}
-            style={{ padding: 8, width: 160 }}
-          />
-          <select value={c0Unit} onChange={(e) => setC0Unit(e.target.value as ConcUnit)}>
-            <option value="nM">nM</option>
-            <option value="µM">µM</option>
-            <option value="mM">mM</option>
-            <option value="M">M</option>
-          </select>
+    <CalcLayout
+      title="Serial Dilution"
+      description="Plan transfer and diluent volumes for a dilution series."
+      onReset={reset}
+      copyText={valid ? buildCopyText() : undefined}
+      tips={
+        <div className="space-y-1.5">
+          <p><strong>Each step:</strong> Transfer = V / df; Diluent = V × (df−1) / df</p>
+          <p><strong>Concentrations:</strong> Cₙ = C₀ / dfⁿ</p>
+          <p><strong>Tip:</strong> 1:10 series over 8 tubes gives a 10⁸-fold range.</p>
         </div>
-
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ width: 220 }}>Dilution each step (1:X)</label>
-          <input
-            type="number"
-            value={factor}
-            onChange={(e) => setFactor(Number(e.target.value))}
-            style={{ padding: 8, width: 160 }}
-          />
-          <span style={{ opacity: 0.75 }}>e.g., 10 = 1:10, 2 = 1:2</span>
-        </div>
-
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ width: 220 }}>Number of tubes (steps)</label>
-          <input
-            type="number"
-            value={steps}
-            onChange={(e) => setSteps(Number(e.target.value))}
-            style={{ padding: 8, width: 160 }}
-          />
-        </div>
-
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ width: 220 }}>Final volume per tube</label>
-          <input
-            type="number"
-            value={finalVol}
-            onChange={(e) => setFinalVol(Number(e.target.value))}
-            style={{ padding: 8, width: 160 }}
-          />
-          <select value={finalVolUnit} onChange={(e) => setFinalVolUnit(e.target.value as VolUnit)}>
-            <option value="µL">µL</option>
-            <option value="mL">mL</option>
-          </select>
-        </div>
-
-        {/* NEW: toggle */}
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ width: 220 }}>Tube numbering</label>
-          <label>
-            <input
-              type="checkbox"
-              checked={includeStock}
-              onChange={(e) => setIncludeStock(e.target.checked)}
-            />{" "}
-            Include stock as Tube 0
-          </label>
-        </div>
+      }
+    >
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <InputField label="Starting concentration (C0)" value={startConc} onChange={setStartConc}
+          unit={startConcU} unitOptions={CONC_UNITS} onUnitChange={setStartConcU} />
+        <InputField label="Dilution factor (1:X)" value={factor} onChange={setFactor}
+          placeholder="e.g. 10" hint="e.g. 10 = 1:10 dilution each step" />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <InputField label="Number of tubes" value={tubes} onChange={setTubes} placeholder="8" hint="Max 20" />
+        <InputField label="Volume per tube" value={volPerTube} onChange={setVolPerTube}
+          unit={volUnit} unitOptions={VOL_UNITS} onUnitChange={setVolUnit} />
       </div>
 
-      {!plan ? (
-        <p style={{ marginTop: 18 }}>Enter valid values to see the dilution plan.</p>
-      ) : (
-        <>
-          <div style={{ marginTop: 18 }}>
-            <strong>Pipetting plan (per tube):</strong>{" "}
-            Transfer <strong>{fmt(plan.transfer_uL, 2)} µL</strong> from previous tube + add{" "}
-            <strong>{fmt(plan.diluent_uL, 2)} µL</strong> diluent (to reach {fmt(plan.Vfinal_uL, 2)} µL).
+      {valid && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="rounded-xl p-4" style={{ background: "var(--output-bg)", border: "1px solid var(--border)" }}>
+            <p className="text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Transfer volume</p>
+            <p className="text-2xl font-mono font-semibold" style={{ color: "var(--output-text)" }}>
+              {fmt(transfer)} <span className="text-base font-normal" style={{ color: "var(--text-muted)" }}>{volUnit}</span>
+            </p>
           </div>
+          <div className="rounded-xl p-4" style={{ background: "var(--output-bg)", border: "1px solid var(--border)" }}>
+            <p className="text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Diluent volume</p>
+            <p className="text-2xl font-mono font-semibold" style={{ color: "var(--output-text)" }}>
+              {fmt(diluent)} <span className="text-base font-normal" style={{ color: "var(--text-muted)" }}>{volUnit}</span>
+            </p>
+          </div>
+        </div>
+      )}
 
-          <div style={{ marginTop: 14, overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      {valid && rows.length > 0 && (
+        <>
+          <SectionDivider label="Dilution Series" />
+          <div className="rounded-xl overflow-hidden border" style={{ borderColor: "var(--border)" }}>
+            <table className="w-full text-sm">
               <thead>
-                <tr style={{ textAlign: "left" }}>
-                  <th style={{ padding: 8 }}>Tube</th>
-                  <th style={{ padding: 8 }}>Concentration</th>
-                  <th style={{ padding: 8 }}>Transfer from previous</th>
-                  <th style={{ padding: 8 }}>Add diluent</th>
+                <tr style={{ background: "var(--bg)" }}>
+                  <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Tube</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Concentration ({startConcU})</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Fold from C0</th>
                 </tr>
               </thead>
               <tbody>
-                {plan.rows.map((r) => {
-                  const concInUnit = fromMolar(r.conc_M, c0Unit);
-                  return (
-                    <tr key={r.tube} style={{ borderTop: "1px solid #eee" }}>
-                      <td style={{ padding: 8 }}>{r.tube}</td>
-                      <td style={{ padding: 8 }}>
-                        {fmt(concInUnit, 6)} {c0Unit}
-                      </td>
-
-                      {r.isStock ? (
-                        <>
-                          <td style={{ padding: 8, opacity: 0.6 }}>—</td>
-                          <td style={{ padding: 8, opacity: 0.6 }}>—</td>
-                        </>
-                      ) : (
-                        <>
-                          <td style={{ padding: 8 }}>{fmt(plan.transfer_uL, 2)} µL</td>
-                          <td style={{ padding: 8 }}>{fmt(plan.diluent_uL, 2)} µL</td>
-                        </>
-                      )}
-                    </tr>
-                  );
-                })}
+                {rows.map((r, i) => (
+                  <tr key={r.tube} className="border-t" style={{ borderColor: "var(--border)", background: i % 2 === 0 ? "var(--bg-card)" : "var(--bg)" }}>
+                    <td className="px-4 py-2 font-medium">{r.tube}</td>
+                    <td className="px-4 py-2 font-mono" style={{ color: "var(--output-text)" }}>{fmt(r.conc)}</td>
+                    <td className="px-4 py-2 font-mono text-xs" style={{ color: "var(--text-muted)" }}>1 : {fmt(Math.pow(df, r.tube), 3)}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
-
-          <p style={{ marginTop: 14, fontSize: 13, opacity: 0.7 }}>
-            {includeStock
-              ? "Note: Tube 0 is the stock solution (C0). Tube 1 is the first dilution. Each next tube is diluted by the same factor."
-              : `Note: Tube 1 assumes you start from stock C0. Each next tube is diluted by the same 1:${factor} factor.`}
-          </p>
         </>
       )}
-    </main>
+    </CalcLayout>
   );
 }
-

@@ -1,171 +1,138 @@
 "use client";
+import { useState } from "react";
+import CalcLayout from "@/components/calculator/CalcLayout";
+import { InputField, SectionDivider } from "@/components/calculator/Field";
+import { fmt, parse, isPos } from "@/lib/fmt";
 
-import { useMemo, useState } from "react";
-
-type Reagent = {
-  name: string;
-  perRxn: number; // µL
-  includeInMix: boolean;
-};
-
-function fmt(x: number, maxFrac = 2) {
-  if (!Number.isFinite(x)) return "—";
-  return x.toLocaleString(undefined, { maximumFractionDigits: maxFrac });
-}
+interface Reagent { id: number; name: string; volPerRxn: string; included: boolean; }
+let nextId = 5;
+const DEFAULT_REAGENTS: Reagent[] = [
+  { id: 1, name: "2× Master Mix",          volPerRxn: "10",  included: true },
+  { id: 2, name: "Forward Primer (10µM)",   volPerRxn: "0.5", included: true },
+  { id: 3, name: "Reverse Primer (10µM)",   volPerRxn: "0.5", included: true },
+  { id: 4, name: "Template DNA",            volPerRxn: "1",   included: true },
+];
 
 export default function PCRMastermixPage() {
-  const [reactions, setReactions] = useState(10);
-  const [extraPercent, setExtraPercent] = useState(10);
+  const [reactions, setReactions]       = useState("10");
+  const [extra, setExtra]               = useState("10");
+  const [reagents, setReagents]         = useState<Reagent[]>(DEFAULT_REAGENTS);
+  const [waterInMix, setWaterInMix]     = useState(true);
+  const [totalPerRxn, setTotalPerRxn]   = useState("20");
 
-  const [reagents, setReagents] = useState<Reagent[]>([
-    { name: "Water", perRxn: 12.5, includeInMix: true },
-    { name: "2× Master Mix", perRxn: 12.5, includeInMix: true },
-    { name: "Forward Primer", perRxn: 1.0, includeInMix: true },
-    { name: "Reverse Primer", perRxn: 1.0, includeInMix: true },
-    { name: "Template DNA", perRxn: 1.0, includeInMix: false }, // often added separately
-  ]);
+  const rxnCount  = parse(reactions);
+  const extraFrac = parse(extra) / 100;
+  const multiplier = isPos(rxnCount) ? rxnCount * (1 + (isFinite(extraFrac) ? extraFrac : 0)) : NaN;
+  const totalV = parse(totalPerRxn);
+  const includedReagents = reagents.filter(r => r.included);
+  const reagentSum = includedReagents.reduce((s, r) => s + (parse(r.volPerRxn) || 0), 0);
+  const waterPerRxn = (isPos(totalV) ? totalV : 20) - reagentSum;
 
-  const multiplier = useMemo(() => {
-    const n = Number(reactions) || 0;
-    const extra = Number(extraPercent) || 0;
-    return n * (1 + extra / 100);
-  }, [reactions, extraPercent]);
-
-  const totals = useMemo(() => {
-    const rows = reagents.map((r) => {
-      const total = r.perRxn * multiplier;
-      return { ...r, total };
-    });
-
-    const totalMix = rows
-      .filter((r) => r.includeInMix)
-      .reduce((sum, r) => sum + r.total, 0);
-
-    const totalAll = rows.reduce((sum, r) => sum + r.total, 0);
-
-    return { rows, totalMix, totalAll };
-  }, [reagents, multiplier]);
-
-  function updateReagent(idx: number, patch: Partial<Reagent>) {
-    setReagents((prev) =>
-      prev.map((r, i) => (i === idx ? { ...r, ...patch } : r))
-    );
+  function updateReagent(id: number, field: keyof Reagent, value: string | boolean) {
+    setReagents(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
   }
-
   function addReagent() {
-    setReagents((prev) => [
-      ...prev,
-      { name: "New reagent", perRxn: 1.0, includeInMix: true },
-    ]);
+    setReagents(prev => [...prev, { id: nextId++, name: "Reagent", volPerRxn: "1", included: true }]);
+  }
+  function removeReagent(id: number) { setReagents(prev => prev.filter(r => r.id !== id)); }
+  function reset() { setReactions("10"); setExtra("10"); setReagents(DEFAULT_REAGENTS.map(r => ({ ...r }))); }
+
+  function buildCopyText() {
+    const lines = [`PCR Mastermix — ${reactions} reactions + ${extra}% overage (×${fmt(multiplier, 3)})`];
+    reagents.filter(r => r.included).forEach(r => lines.push(`  ${r.name}: ${fmt(parse(r.volPerRxn) * multiplier, 3)} µL`));
+    if (waterInMix) lines.push(`  Water: ${fmt(waterPerRxn * multiplier, 3)} µL`);
+    const total = ((waterInMix ? waterPerRxn : 0) + reagentSum) * multiplier;
+    lines.push(`Total: ${fmt(total, 4)} µL`);
+    return lines.join("\n");
   }
 
-  function removeReagent(idx: number) {
-    setReagents((prev) => prev.filter((_, i) => i !== idx));
-  }
+  const totalMixVol = ((waterInMix ? waterPerRxn : 0) + reagentSum) * multiplier;
 
   return (
-    <main style={{ padding: 24, maxWidth: 900 }}>
-      <h1>PCR Mastermix</h1>
-      <p style={{ opacity: 0.8 }}>
-        Enter per-reaction volumes (µL). We’ll multiply by number of reactions +
-        extra percent to avoid running short.
-      </p>
+    <CalcLayout
+      title="PCR Mastermix"
+      description="Scale reagent volumes for any number of reactions with overage."
+      onReset={reset}
+      copyText={isFinite(multiplier) ? buildCopyText() : undefined}
+      tips={
+        <div className="space-y-1.5">
+          <p><strong>Multiplier</strong> = reactions × (1 + extra%/100)</p>
+          <p>Water = total reaction vol − sum of other reagents.</p>
+          <p><strong>Tip:</strong> 10% overage is standard; 5% for ≥ 24 reactions.</p>
+        </div>
+      }
+    >
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <InputField label="# Reactions" value={reactions} onChange={setReactions} placeholder="10" />
+        <InputField label="Overage (%)" value={extra} onChange={setExtra} placeholder="10" unit="%" />
+        <InputField label="Vol / reaction" value={totalPerRxn} onChange={setTotalPerRxn} placeholder="20" unit="µL" />
+      </div>
 
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 16 }}>
+      {isPos(rxnCount) && (
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Preparing for <strong style={{ color: "var(--accent)" }}>{fmt(multiplier, 3)}</strong> reactions total
+        </p>
+      )}
+
+      <SectionDivider label="Reagents" />
+      <div className="space-y-2">
+        <div className="grid grid-cols-[auto_1fr_100px_80px_32px] gap-2 px-1 text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+          <span>On</span><span>Reagent</span><span>µL / rxn</span><span>Total µL</span><span></span>
+        </div>
+        {reagents.map(r => {
+          const perRxn = parse(r.volPerRxn);
+          const total  = isFinite(multiplier) && isPos(parse(r.volPerRxn)) ? perRxn * multiplier : NaN;
+          return (
+            <div key={r.id} className="grid grid-cols-[auto_1fr_100px_80px_32px] gap-2 items-center">
+              <input type="checkbox" checked={r.included} onChange={e => updateReagent(r.id, "included", e.target.checked)} className="w-4 h-4 rounded" />
+              <input value={r.name} onChange={e => updateReagent(r.id, "name", e.target.value)}
+                className="rounded-lg px-2 py-1.5 text-sm outline-none"
+                style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)" }} />
+              <input type="number" value={r.volPerRxn} onChange={e => updateReagent(r.id, "volPerRxn", e.target.value)}
+                className="rounded-lg px-2 py-1.5 text-sm font-mono outline-none text-right"
+                style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)" }} />
+              <span className="text-sm font-mono text-right px-2 py-1.5 rounded-lg"
+                style={{ background: r.included && isFinite(total) ? "var(--output-bg)" : "var(--bg)", color: r.included && isFinite(total) ? "var(--output-text)" : "var(--text-muted)", border: "1px solid var(--border)", opacity: r.included ? 1 : 0.4 }}>
+                {r.included && isFinite(total) ? fmt(total, 3) : "—"}
+              </span>
+              <button onClick={() => removeReagent(r.id)} className="text-xs rounded px-1 py-1 hover:opacity-70" style={{ color: "var(--text-muted)" }}>✕</button>
+            </div>
+          );
+        })}
+        <div className="grid grid-cols-[auto_1fr_100px_80px_32px] gap-2 items-center">
+          <input type="checkbox" checked={waterInMix} onChange={e => setWaterInMix(e.target.checked)} className="w-4 h-4 rounded" />
+          <span className="text-sm px-2 py-1.5" style={{ color: "var(--text-muted)" }}>Nuclease-free water</span>
+          <span className="text-sm font-mono text-right px-2 py-1.5 rounded-lg"
+            style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
+            {fmt(waterPerRxn, 3)}
+          </span>
+          <span className="text-sm font-mono text-right px-2 py-1.5 rounded-lg"
+            style={{ background: waterInMix && isFinite(multiplier) ? "var(--output-bg)" : "var(--bg)", color: waterInMix && isFinite(multiplier) ? "var(--output-text)" : "var(--text-muted)", border: "1px solid var(--border)" }}>
+            {waterInMix && isFinite(multiplier) ? fmt(waterPerRxn * multiplier, 3) : "—"}
+          </span>
+          <span />
+        </div>
+      </div>
+
+      <button onClick={addReagent} className="text-sm font-medium hover:opacity-70 transition-colors" style={{ color: "var(--accent)" }}>
+        + Add reagent
+      </button>
+
+      <SectionDivider label="Summary" />
+      <div className="rounded-xl p-4 flex justify-between items-center"
+        style={{ background: "var(--output-bg)", border: "1px solid var(--border)" }}>
         <div>
-          <label>Number of reactions</label>
-          <br />
-          <input
-            type="number"
-            value={reactions}
-            onChange={(e) => setReactions(Number(e.target.value))}
-            style={{ padding: 8, width: 180 }}
-          />
+          <p className="text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Total mastermix volume</p>
+          <p className="text-2xl font-mono font-semibold" style={{ color: "var(--output-text)" }}>
+            {isFinite(totalMixVol) ? fmt(totalMixVol, 4) : "—"}
+            <span className="text-base font-normal ml-1.5" style={{ color: "var(--text-muted)" }}>µL</span>
+          </p>
         </div>
-
-        <div>
-          <label>Extra (%)</label>
-          <br />
-          <input
-            type="number"
-            value={extraPercent}
-            onChange={(e) => setExtraPercent(Number(e.target.value))}
-            style={{ padding: 8, width: 180 }}
-          />
-        </div>
-
-        <div style={{ alignSelf: "end", opacity: 0.8 }}>
-          Multiplier: <strong>{fmt(multiplier, 2)}</strong> reactions equivalent
+        <div className="text-right">
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>Per reaction</p>
+          <p className="font-mono font-semibold" style={{ color: "var(--output-text)" }}>{isPos(totalV) ? fmt(totalV) : "—"} µL</p>
         </div>
       </div>
-
-      <div style={{ marginTop: 18, overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ textAlign: "left" }}>
-              <th style={{ padding: 8 }}>Reagent</th>
-              <th style={{ padding: 8 }}>Per reaction (µL)</th>
-              <th style={{ padding: 8 }}>Include in master mix?</th>
-              <th style={{ padding: 8 }}>Total (µL)</th>
-              <th style={{ padding: 8 }} />
-            </tr>
-          </thead>
-          <tbody>
-            {totals.rows.map((r, idx) => (
-              <tr key={idx} style={{ borderTop: "1px solid #eee" }}>
-                <td style={{ padding: 8 }}>
-                  <input
-                    value={r.name}
-                    onChange={(e) => updateReagent(idx, { name: e.target.value })}
-                    style={{ padding: 8, width: "100%" }}
-                  />
-                </td>
-                <td style={{ padding: 8 }}>
-                  <input
-                    type="number"
-                    value={r.perRxn}
-                    onChange={(e) => updateReagent(idx, { perRxn: Number(e.target.value) })}
-                    style={{ padding: 8, width: 160 }}
-                  />
-                </td>
-                <td style={{ padding: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={r.includeInMix}
-                    onChange={(e) => updateReagent(idx, { includeInMix: e.target.checked })}
-                  />{" "}
-                  Yes
-                </td>
-                <td style={{ padding: 8 }}>
-                  {fmt(r.total, 2)}
-                </td>
-                <td style={{ padding: 8 }}>
-                  <button onClick={() => removeReagent(idx)}>Remove</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div style={{ marginTop: 14, display: "flex", gap: 12 }}>
-        <button onClick={addReagent}>+ Add reagent</button>
-      </div>
-
-      <div style={{ marginTop: 18 }}>
-        <div>
-          <strong>Total master mix volume:</strong> {fmt(totals.totalMix, 2)} µL{" "}
-          <span style={{ opacity: 0.7 }}>(excluding items unchecked)</span>
-        </div>
-        <div style={{ marginTop: 6 }}>
-          <strong>Total volume including everything:</strong> {fmt(totals.totalAll, 2)} µL
-        </div>
-      </div>
-
-      <p style={{ marginTop: 14, fontSize: 13, opacity: 0.7 }}>
-        Tip: Many protocols add template separately (uncheck “include in master mix”).
-      </p>
-    </main>
+    </CalcLayout>
   );
 }
-
