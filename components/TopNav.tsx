@@ -7,7 +7,7 @@ const NAV = [
   { name: "Home",        href: "/",           soon: false },
   { name: "Calculators", href: "/calculator", soon: false },
   { name: "Statistics",  href: "/statistics", soon: false },
-  { name: "Notebook",    href: "#",           soon: true  },
+  { name: "Notebook",    href: "/notebook",   soon: false },
 ];
 
 export function TopNav() {

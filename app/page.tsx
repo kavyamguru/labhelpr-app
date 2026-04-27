@@ -20,12 +20,12 @@ const FEATURES = [
     tools: ["Descriptive", "T-tests", "ANOVA", "Correlation", "Non-parametric", "Survival"],
   },
   {
-    href: "#",
+    href: "/notebook",
     label: "Notebook",
-    desc: "Record experiments, manage samples, track inventory, and keep your lab organised.",
+    desc: "Log experiments, manage your sample bank, track reagent stock, and keep lab tasks organised.",
     icon: "📓",
-    soon: true,
-    tools: ["Experiments", "Samples", "Inventory", "Instruments", "Tasks", "Calendar"],
+    soon: false,
+    tools: ["Experiments", "Sample Bank", "Reagent Stock", "Lab Tasks"],
   },
 ];
 
