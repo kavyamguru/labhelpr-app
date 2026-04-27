@@ -1,5 +1,6 @@
 "use client";
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
+import { toPng, toSvg } from "html-to-image";
 import {
   ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis, CartesianGrid,
   Tooltip, BarChart, Bar, ErrorBar, ReferenceLine,
@@ -276,6 +277,132 @@ function exportCSV(groups: Group[], transform: Transform) {
   const a = document.createElement("a");
   a.href = url; a.download = "descriptive_stats.csv"; a.click();
   URL.revokeObjectURL(url);
+}
+
+// ── PlotPanel with export ────────────────────────────────────────────────────
+interface PlotPanelProps {
+  groups: Group[];
+  transform: Transform;
+  errorType: ErrorType;
+  plotType: PlotType;
+  setPlotType: (p: PlotType) => void;
+  activeGroup: number;
+  activeVals: number[];
+}
+
+function PlotPanel({ groups, transform, errorType, plotType, setPlotType, activeGroup, activeVals }: PlotPanelProps) {
+  const chartRef = useRef<HTMLDivElement>(null);
+  const [exporting, setExporting] = useState<"png" | "svg" | null>(null);
+
+  async function exportFigure(format: "png" | "svg") {
+    if (!chartRef.current) return;
+    setExporting(format);
+    try {
+      const plotLabel = plotType === "dot" ? "strip-plot"
+        : plotType === "bar" ? "bar-chart"
+        : plotType === "histogram" ? "histogram"
+        : "qq-plot";
+      const filename = `labhelpr_${plotLabel}`;
+
+      if (format === "png") {
+        const dataUrl = await toPng(chartRef.current, {
+          pixelRatio: 3, // ~300 DPI at standard screen size
+          backgroundColor: "#04070d",
+          style: { borderRadius: "0" },
+        });
+        const a = document.createElement("a");
+        a.href = dataUrl;
+        a.download = `${filename}.png`;
+        a.click();
+      } else {
+        const dataUrl = await toSvg(chartRef.current, {
+          backgroundColor: "#04070d",
+          style: { borderRadius: "0" },
+        });
+        const a = document.createElement("a");
+        a.href = dataUrl;
+        a.download = `${filename}.svg`;
+        a.click();
+      }
+    } finally {
+      setExporting(null);
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border p-5 space-y-4" style={{ background: "var(--bg-card)", borderColor: "var(--border)" }}>
+      <div className="flex items-center gap-2 flex-wrap">
+        <h2 className="text-sm font-semibold mr-2" style={{ color: "var(--text)" }}>Visualisation</h2>
+        {(["dot", "bar", "histogram", "qq"] as PlotType[]).map(pt => (
+          <button
+            key={pt}
+            onClick={() => setPlotType(pt)}
+            className="px-2.5 py-1 rounded-lg text-xs font-medium transition-colors"
+            style={{
+              background: plotType === pt ? "var(--accent)" : "transparent",
+              color: plotType === pt ? "#04070d" : "var(--text-muted)",
+              border: `1px solid ${plotType === pt ? "var(--accent)" : "var(--border)"}`,
+            }}
+          >
+            {pt === "dot" ? "Strip" : pt === "bar" ? "Bar+Error" : pt === "histogram" ? "Histogram" : "Q-Q"}
+          </button>
+        ))}
+
+        {/* Export buttons */}
+        <div className="ml-auto flex gap-1.5">
+          <button
+            onClick={() => exportFigure("png")}
+            disabled={exporting !== null}
+            className="px-2.5 py-1 rounded-lg text-xs font-medium transition-colors"
+            style={{
+              background: "rgba(166,218,255,0.08)",
+              color: exporting === "png" ? "var(--text-dim)" : "var(--accent)",
+              border: "1px solid rgba(166,218,255,0.15)",
+            }}
+          >
+            {exporting === "png" ? "Exporting…" : "PNG (300 DPI)"}
+          </button>
+          <button
+            onClick={() => exportFigure("svg")}
+            disabled={exporting !== null}
+            className="px-2.5 py-1 rounded-lg text-xs font-medium transition-colors"
+            style={{
+              background: "rgba(166,218,255,0.08)",
+              color: exporting === "svg" ? "var(--text-dim)" : "var(--accent)",
+              border: "1px solid rgba(166,218,255,0.15)",
+            }}
+          >
+            {exporting === "svg" ? "Exporting…" : "SVG"}
+          </button>
+        </div>
+      </div>
+
+      <p className="text-xs" style={{ color: "var(--text-dim)" }}>
+        {plotType === "dot" && "Strip plot — each dot = one observation (recommended n ≤ 20, eLife guidelines)"}
+        {plotType === "bar" && `Bar chart ± ${errorType.toUpperCase().replace("CI95","95% CI")}`}
+        {plotType === "histogram" && "Frequency distribution (active group)"}
+        {plotType === "qq" && "Q-Q plot for normality assessment (active group)"}
+      </p>
+
+      {/* Chart area — this gets captured for export */}
+      <div ref={chartRef} style={{ background: "#04070d", padding: "16px", borderRadius: "8px" }}>
+        {plotType === "dot" && <DotPlot groups={groups} transform={transform} />}
+        {plotType === "bar" && <BarErrorChart groups={groups} transform={transform} errorType={errorType} />}
+        {plotType === "histogram" && activeVals.length >= 3 && (
+          <Histogram values={activeVals} color={COLORS[activeGroup % COLORS.length]} />
+        )}
+        {plotType === "qq" && activeVals.length >= 4 && (
+          <QQPlot values={activeVals} color={COLORS[activeGroup % COLORS.length]} />
+        )}
+      </div>
+
+      {plotType === "bar" && (
+        <p className="text-xs" style={{ color: "var(--text-dim)" }}>
+          Note: Bar charts with error bars are discouraged for n &lt; 10 (Weissgerber et al. 2015, PLOS Biology). Consider strip plot for small n.
+        </p>
+      )}
+    </div>
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -658,46 +785,15 @@ export default function DescriptiveStatsPage() {
 
         {/* Plots */}
         {groups.some(g => g.values.filter((_, i) => !g.excluded.has(i)).length >= 2) && (
-          <div className="rounded-2xl border p-5 space-y-4" style={{ background: "var(--bg-card)", borderColor: "var(--border)" }}>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-sm font-semibold mr-2" style={{ color: "var(--text)" }}>Visualisation</h2>
-              {(["dot", "bar", "histogram", "qq"] as PlotType[]).map(pt => (
-                <button
-                  key={pt}
-                  onClick={() => setPlotType(pt)}
-                  className="px-2.5 py-1 rounded-lg text-xs font-medium transition-colors"
-                  style={{
-                    background: plotType === pt ? "var(--accent)" : "transparent",
-                    color: plotType === pt ? "#04070d" : "var(--text-muted)",
-                    border: `1px solid ${plotType === pt ? "var(--accent)" : "var(--border)"}`,
-                  }}
-                >
-                  {pt === "dot" ? "Strip" : pt === "bar" ? "Bar+Error" : pt === "histogram" ? "Histogram" : "Q-Q"}
-                </button>
-              ))}
-              <p className="text-xs ml-auto" style={{ color: "var(--text-dim)" }}>
-                {plotType === "dot" && "Strip plot — each dot = one observation (recommended n ≤ 20, eLife guidelines)"}
-                {plotType === "bar" && `Bar chart ± ${errorType.toUpperCase().replace("CI95","95% CI")}`}
-                {plotType === "histogram" && "Frequency distribution (active group)"}
-                {plotType === "qq" && "Q-Q plot for normality assessment (active group)"}
-              </p>
-            </div>
-
-            {plotType === "dot" && <DotPlot groups={groups} transform={transform} />}
-            {plotType === "bar" && <BarErrorChart groups={groups} transform={transform} errorType={errorType} />}
-            {plotType === "histogram" && activeVals.length >= 3 && (
-              <Histogram values={activeVals} color={COLORS[activeGroup % COLORS.length]} />
-            )}
-            {plotType === "qq" && activeVals.length >= 4 && (
-              <QQPlot values={activeVals} color={COLORS[activeGroup % COLORS.length]} />
-            )}
-
-            {plotType === "bar" && (
-              <p className="text-xs" style={{ color: "var(--text-dim)" }}>
-                Note: Bar charts with error bars are discouraged for n &lt; 10 (Weissgerber et al. 2015, PLOS Biology). Consider strip plot for small n.
-              </p>
-            )}
-          </div>
+          <PlotPanel
+            groups={groups}
+            transform={transform}
+            errorType={errorType}
+            plotType={plotType}
+            setPlotType={setPlotType}
+            activeGroup={activeGroup}
+            activeVals={activeVals}
+          />
         )}
 
         {/* Methods sentence + export */}
