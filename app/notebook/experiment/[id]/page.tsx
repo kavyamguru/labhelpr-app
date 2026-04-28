@@ -4,7 +4,9 @@ import { useRouter, useParams } from "next/navigation";
 import {
   getExperiment,
   saveExperiment,
+  deleteExperiment,
 } from "@/lib/notebook/db";
+import { downloadPDF, downloadDocx, downloadCSV } from "@/lib/export";
 import type {
   Experiment, ExpStatus, Block, ExperimentSection, BlockType, BlockData,
   ChecklistItem, SampleRow, ReagentRow, ThermocyclerStep, DeviationEntry,
@@ -689,6 +691,65 @@ export default function ExperimentPage() {
     );
   }
 
+  // ── Export helpers ──────────────────────────────────────────────────────────
+  const [showExport, setShowExport] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
+
+  function expToSections() {
+    if (!exp) return [];
+    const base = [
+      { heading: "Objective", body: exp.objective || "—" },
+      { heading: "Hypothesis", body: exp.hypothesis || "—" },
+    ];
+    for (const sec of exp.sections) {
+      for (const block of sec.blocks) {
+        const d = block.data;
+        let body = "";
+        if (d.type === "text") body = d.content;
+        else if (d.type === "checklist") body = d.items.map(i => `[${i.checked ? "x" : " "}] ${i.label}`).join("\n");
+        else if (d.type === "results") body = `Summary: ${d.summary}\nData: ${d.quantitative}\nInterpretation: ${d.interpretation}`;
+        else if (d.type === "gel") body = `${d.description}\nBands: ${d.bands}\n${d.imageNote}`;
+        else if (d.type === "cell_count") body = `Cell line: ${d.cellLine}\nViability: ${d.viability}\nDensity: ${d.density}\nMethod: ${d.method}\n${d.notes}`;
+        else body = JSON.stringify(d, null, 2);
+        base.push({ heading: `${sec.title} — ${block.type.replace(/_/g, " ")}`, body });
+      }
+    }
+    return base;
+  }
+
+  async function handleExportPDF() {
+    if (!exp) return;
+    setShowExport(false);
+    await downloadPDF(exp.title, expToSections(), undefined, exp.uniqueCode);
+  }
+
+  async function handleExportWord() {
+    if (!exp) return;
+    setShowExport(false);
+    await downloadDocx(exp.title, expToSections(), exp.uniqueCode);
+  }
+
+  function handleExportText() {
+    if (!exp) return;
+    setShowExport(false);
+    const lines = [`${exp.title} (${exp.uniqueCode})`, `Status: ${exp.status}`, `Date: ${new Date(exp.createdAt).toLocaleDateString()}`, "", ...expToSections().flatMap(s => [`## ${s.heading}`, s.body, ""])];
+    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${exp.uniqueCode}.txt`; a.click();
+  }
+
+  function handleCopy() {
+    if (!exp) return;
+    setShowExport(false);
+    const text = expToSections().map(s => `${s.heading}\n${s.body}`).join("\n\n");
+    navigator.clipboard.writeText(`${exp.title} (${exp.uniqueCode})\n\n${text}`);
+  }
+
+  async function handleDelete() {
+    if (!exp) return;
+    await deleteExperiment(exp.id);
+    router.push("/notebook");
+  }
+
   return (
     <div className="min-h-screen pb-20" style={{ background: "var(--bg)", color: "var(--text)" }}>
       {/* Header */}
@@ -697,8 +758,8 @@ export default function ExperimentPage() {
           ←
         </button>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>{exp.uniqueCode}</span>
+          <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
+            <span className="text-xs font-medium font-mono" style={{ color: "var(--text-muted)" }}>{exp.uniqueCode}</span>
             <select
               value={exp.status}
               onChange={e => update({ status: e.target.value as ExpStatus })}
@@ -714,8 +775,53 @@ export default function ExperimentPage() {
               ))}
             </select>
           </div>
+          <div className="flex gap-1.5 shrink-0">
+            <button onClick={() => setShowExport(v => !v)} className="px-3 py-1.5 rounded-xl text-xs font-medium" style={{ background: "rgba(166,218,255,0.08)", color: "var(--accent)", border: "1px solid rgba(166,218,255,0.15)" }}>
+              Export
+            </button>
+            <button onClick={() => setShowDelete(true)} className="px-3 py-1.5 rounded-xl text-xs font-medium" style={{ background: "rgba(240,100,90,0.08)", color: "#f06459", border: "1px solid rgba(240,100,90,0.15)" }}>
+              Delete
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Export menu */}
+      {showExport && (
+        <div className="fixed inset-x-0 top-[108px] z-50 mx-4">
+          <div className="rounded-2xl border p-3 space-y-1 shadow-2xl" style={{ background: "var(--bg-card)", borderColor: "var(--border)" }}>
+            <p className="text-xs font-medium uppercase tracking-wider px-2 pb-1" style={{ color: "var(--text-muted)" }}>Export experiment</p>
+            {([
+              { label: "PDF", action: handleExportPDF },
+              { label: "Word (.docx)", action: handleExportWord },
+              { label: "Plain text (.txt)", action: handleExportText },
+              { label: "Copy to clipboard", action: handleCopy },
+            ] as const).map(item => (
+              <button key={item.label} onClick={item.action as () => void} className="w-full text-left px-3 py-2.5 rounded-xl text-sm transition-colors" style={{ color: "var(--text)", background: "transparent" }}
+                onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+              >
+                {item.label}
+              </button>
+            ))}
+            <button onClick={() => setShowExport(false)} className="w-full text-center py-2 text-xs" style={{ color: "var(--text-muted)" }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Delete confirmation */}
+      {showDelete && (
+        <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center" style={{ background: "rgba(0,0,0,0.7)" }}>
+          <div className="w-full max-w-sm mx-4 mb-4 md:mb-0 rounded-2xl border p-5 space-y-4" style={{ background: "var(--bg-card)", borderColor: "var(--border)" }}>
+            <p className="text-base font-semibold" style={{ color: "var(--text)" }}>Delete this experiment?</p>
+            <p className="text-sm" style={{ color: "var(--text-muted)" }}>All blocks, notes, and data will be permanently deleted. This cannot be undone.</p>
+            <div className="flex gap-2">
+              <button onClick={() => setShowDelete(false)} className="flex-1 py-3 rounded-xl text-sm border" style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}>Cancel</button>
+              <button onClick={handleDelete} className="flex-1 py-3 rounded-xl text-sm font-semibold" style={{ background: "#f06459", color: "#fff" }}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="px-4 pt-4 space-y-5 max-w-2xl mx-auto">
         {/* Title */}
@@ -801,8 +907,27 @@ export default function ExperimentPage() {
             {/* Blocks */}
             {sec.blocks.map(block => (
               <div key={block.id} className="rounded-2xl p-4 space-y-3" style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}>
-                <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
-                  {BLOCK_TYPE_OPTIONS.find(o => o.type === block.type)?.label ?? block.type}
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+                    {BLOCK_TYPE_OPTIONS.find(o => o.type === block.type)?.label ?? block.type}
+                  </div>
+                  <button
+                    onClick={() => {
+                      setExp(prev => {
+                        if (!prev) return prev;
+                        return {
+                          ...prev,
+                          sections: prev.sections.map(s =>
+                            s.id === sec.id ? { ...s, blocks: s.blocks.filter(b => b.id !== block.id) } : s
+                          ),
+                        };
+                      });
+                    }}
+                    className="text-[10px] px-2 py-0.5 rounded-lg"
+                    style={{ color: "#f06459", background: "rgba(240,100,90,0.08)" }}
+                  >
+                    Remove
+                  </button>
                 </div>
                 <BlockRenderer block={block} onChange={b => updateBlock(sec.id, b)} />
               </div>

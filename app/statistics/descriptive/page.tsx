@@ -243,40 +243,79 @@ function generateMethods(groups: Group[], transform: Transform, errorType: Error
   return `Data are presented as mean ± ${errorLabel} for ${groupDesc}.${transformText}${normalityText}${nonParamNote} Statistical analyses were performed using LabHelpr (labhelpr.vercel.app).`;
 }
 
+// ── shared stat rows builder ──────────────────────────────────────────────────
+function buildStatRows(groups: Group[], transform: Transform) {
+  const headers = ["Group", "N", "Mean", "Median", "SD", "SEM", "95% CI Low", "95% CI High", "IQR", "Q1", "Q3", "Min", "Max", "CV%", "Skewness", "Kurtosis"];
+  const dataRows = groups.map((g, gi) => {
+    const vals = applyTransform(g.values.filter((_, i) => !g.excluded.has(i)), transform);
+    if (vals.length < 2) return null;
+    const s = computeStats(vals);
+    return [
+      g.label || `Group${gi+1}`,
+      s.n, fmtN(s.mean), fmtN(s.median), fmtN(s.sd), fmtN(s.sem),
+      fmtN(s.ci95Low), fmtN(s.ci95High), fmtN(s.iqr), fmtN(s.q1), fmtN(s.q3),
+      fmtN(s.min), fmtN(s.max),
+      isFinite(s.cv) ? fmtN(s.cv) + "%" : "—",
+      fmtN(s.skewness, 3), fmtN(s.kurtosis, 3),
+    ];
+  }).filter(Boolean) as (string | number)[][];
+  return { headers, dataRows };
+}
+
+function buildRawRows(groups: Group[]) {
+  const maxLen = Math.max(...groups.map(g => g.values.length));
+  const header = groups.map((g, i) => g.label || `Group${i+1}`);
+  const rows: (string | number)[][] = [header];
+  for (let r = 0; r < maxLen; r++) {
+    rows.push(groups.map(g => g.values[r] !== undefined ? g.values[r] : ""));
+  }
+  return rows;
+}
+
 // ── export to CSV ─────────────────────────────────────────────────────────────
 function exportCSV(groups: Group[], transform: Transform) {
-  const rows: string[][] = [];
-  // Header
-  const headers = ["Group", "N", "Mean", "Median", "SD", "SEM", "95% CI Low", "95% CI High", "IQR", "Min", "Max", "CV%"];
-  rows.push(headers);
-
-  groups.forEach((g, gi) => {
-    const vals = applyTransform(g.values.filter((_, i) => !g.excluded.has(i)), transform);
-    if (vals.length < 2) return;
-    const s = computeStats(vals);
-    rows.push([
-      g.label || `Group${gi+1}`,
-      String(s.n), fmtN(s.mean), fmtN(s.median), fmtN(s.sd), fmtN(s.sem),
-      fmtN(s.ci95Low), fmtN(s.ci95High), fmtN(s.iqr), fmtN(s.min), fmtN(s.max),
-      isFinite(s.cv) ? fmtN(s.cv) + "%" : "—",
-    ]);
-  });
-
-  // Raw data
-  rows.push([]);
-  rows.push(["--- Raw Data ---"]);
-  const maxLen = Math.max(...groups.map(g => g.values.length));
-  rows.push(groups.map((g, i) => g.label || `Group${i+1}`));
-  for (let r = 0; r < maxLen; r++) {
-    rows.push(groups.map(g => g.values[r] !== undefined ? String(g.values[r]) : ""));
-  }
-
-  const csv = rows.map(r => r.map(c => `"${c}"`).join(",")).join("\n");
+  const { headers, dataRows } = buildStatRows(groups, transform);
+  const rawRows = buildRawRows(groups);
+  const all = [headers, ...dataRows, [], ["--- Raw Data ---"], ...rawRows];
+  const csv = all.map(r => r.map(c => `"${c}"`).join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url; a.download = "descriptive_stats.csv"; a.click();
-  URL.revokeObjectURL(url);
+  a.href = URL.createObjectURL(blob); a.download = "descriptive_stats.csv"; a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// ── export to Excel ───────────────────────────────────────────────────────────
+async function exportExcel(groups: Group[], transform: Transform) {
+  const { downloadXLSX } = await import("@/lib/export");
+  const { headers, dataRows } = buildStatRows(groups, transform);
+  const rawRows = buildRawRows(groups);
+  await downloadXLSX([
+    { name: "Summary Statistics", rows: [headers, ...dataRows] },
+    { name: "Raw Data", rows: rawRows },
+  ], "descriptive_stats");
+}
+
+// ── export to TSV ─────────────────────────────────────────────────────────────
+function exportTSV(groups: Group[], transform: Transform) {
+  const { headers, dataRows } = buildStatRows(groups, transform);
+  const tsv = [headers, ...dataRows].map(r => r.join("\t")).join("\n");
+  const blob = new Blob([tsv], { type: "text/tab-separated-values" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "descriptive_stats.tsv"; a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// ── export to LaTeX ───────────────────────────────────────────────────────────
+function exportLatex(groups: Group[], transform: Transform) {
+  const { headers, dataRows } = buildStatRows(groups, transform);
+  const cols = headers.map(() => "l").join(" | ");
+  const hRow = headers.map(h => `\\textbf{${h}}`).join(" & ");
+  const dRows = dataRows.map(r => r.join(" & ") + " \\\\").join("\n");
+  const latex = `\\begin{table}[h]\n\\centering\n\\caption{Descriptive statistics}\n\\begin{tabular}{${cols}}\n\\hline\n${hRow} \\\\\n\\hline\n${dRows}\n\\hline\n\\end{tabular}\n\\end{table}`;
+  const blob = new Blob([latex], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "descriptive_stats.tex"; a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 // ── PlotPanel with export ────────────────────────────────────────────────────
@@ -825,14 +864,23 @@ export default function DescriptiveStatsPage() {
             )}
           </div>
 
-          <div className="flex gap-2 flex-wrap pt-1">
-            <button
-              onClick={() => exportCSV(groups, transform)}
-              className="text-xs px-3 py-1.5 rounded-lg border transition-colors"
-              style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}
-            >
-              Export CSV (source data)
-            </button>
+          <div className="space-y-2 pt-1">
+            <p className="text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Export table</p>
+            <div className="flex gap-2 flex-wrap">
+              {[
+                { label: "CSV", action: () => exportCSV(groups, transform) },
+                { label: "Excel (.xlsx)", action: () => exportExcel(groups, transform) },
+                { label: "TSV", action: () => exportTSV(groups, transform) },
+                { label: "LaTeX (.tex)", action: () => exportLatex(groups, transform) },
+              ].map(btn => (
+                <button key={btn.label} onClick={btn.action}
+                  className="text-xs px-3 py-1.5 rounded-lg border transition-colors"
+                  style={{ borderColor: "var(--border)", color: "var(--text-muted)", background: "var(--bg-card)" }}>
+                  {btn.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs" style={{ color: "var(--text-dim)" }}>CSV / TSV — universal; Excel — open in GraphPad / SPSS; LaTeX — paste directly into paper</p>
           </div>
         </div>
 

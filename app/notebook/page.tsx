@@ -201,13 +201,16 @@ function HomeTab({ experiments, tasks, onTab, onNewExp, onNewTask }: {
 }
 
 // ─── Tab: Experiments ────────────────────────────────────────────────────────
-function ExperimentsTab({ experiments, onNew, onNavigate }: {
+function ExperimentsTab({ experiments, onNew, onNavigate, onDelete }: {
   experiments: Experiment[];
   onNew: () => void;
   onNavigate: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"ALL" | ExpStatus>("ALL");
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
   const filtered = experiments.filter(e => {
     const matchStatus = filter === "ALL" || e.status === filter;
     const q = search.toLowerCase();
@@ -221,7 +224,7 @@ function ExperimentsTab({ experiments, onNew, onNavigate }: {
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search experiments…" className={`${inputCls} flex-1`} style={inputStyle} />
         <PrimaryBtn onClick={onNew}>New</PrimaryBtn>
       </div>
-      <div className="flex gap-2 overflow-x-auto pb-1">
+      <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
         {(["ALL", "DRAFT", "IN_PROGRESS", "COMPLETE", "FLAGGED"] as const).map(s => (
           <button key={s} onClick={() => setFilter(s)} className="shrink-0 text-xs px-3 py-2 rounded-lg font-medium transition-all"
             style={{ background: filter === s ? "var(--accent)" : "var(--bg-card)", color: filter === s ? "#04070d" : "var(--text-muted)", border: "1px solid var(--border)" }}>
@@ -234,23 +237,46 @@ function ExperimentsTab({ experiments, onNew, onNavigate }: {
       ) : (
         <div className="space-y-3">
           {filtered.map(e => (
-            <Card key={e.id} onClick={() => onNavigate(e.id)}>
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold" style={{ color: "var(--text)" }}>{e.title}</div>
-                  <div className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{e.uniqueCode}</div>
+            <div key={e.id} className="rounded-2xl border" style={{ background: "var(--bg-card)", borderColor: "var(--border)" }}>
+              <button className="w-full text-left p-4 space-y-2" onClick={() => onNavigate(e.id)}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold" style={{ color: "var(--text)" }}>{e.title}</div>
+                    <div className="text-xs mt-0.5 font-mono" style={{ color: "var(--text-muted)" }}>{e.uniqueCode}</div>
+                  </div>
+                  <Badge label={e.status} color={STATUS_COLOR[e.status]} />
                 </div>
-                <Badge label={e.status} color={STATUS_COLOR[e.status]} />
+                <div className="text-xs" style={{ color: "var(--text-muted)" }}>Updated {fmtDate(e.updatedAt)}</div>
+                {e.tags.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {e.tags.map(t => <span key={t} className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: "rgba(255,255,255,0.06)", color: "var(--text-dim)" }}>{t}</span>)}
+                  </div>
+                )}
+              </button>
+              <div className="flex border-t px-4 py-2 gap-2" style={{ borderColor: "var(--border)" }}>
+                <button onClick={() => onNavigate(e.id)} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: "rgba(166,218,255,0.08)", color: "var(--accent)" }}>
+                  Open
+                </button>
+                <button onClick={() => setConfirmDelete(e.id)} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: "rgba(240,100,90,0.08)", color: "#f06459" }}>
+                  Delete
+                </button>
               </div>
-              <div className="text-xs" style={{ color: "var(--text-muted)" }}>{fmtDate(e.updatedAt)}</div>
-              {e.tags.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {e.tags.map(t => <span key={t} className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: "rgba(255,255,255,0.06)", color: "var(--text-dim)" }}>{t}</span>)}
-                </div>
-              )}
-            </Card>
+            </div>
           ))}
         </div>
+      )}
+
+      {/* Delete confirmation */}
+      {confirmDelete && (
+        <Modal title="Delete experiment?" onClose={() => setConfirmDelete(null)}>
+          <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+            This will permanently delete the experiment and all its data. This cannot be undone.
+          </p>
+          <div className="flex gap-2 pt-2">
+            <button onClick={() => setConfirmDelete(null)} className="flex-1 py-3 rounded-xl text-sm border" style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}>Cancel</button>
+            <button onClick={() => { onDelete(confirmDelete); setConfirmDelete(null); }} className="flex-1 py-3 rounded-xl text-sm font-medium" style={{ background: "#f06459", color: "#fff" }}>Delete</button>
+          </div>
+        </Modal>
       )}
     </div>
   );
@@ -1077,6 +1103,10 @@ export default function NotebookPage() {
     await saveExperiment(exp);
     setExperiments(prev => prev.map(e => e.id === exp.id ? exp : e));
   }
+  async function handleDeleteExperiment(id: string) {
+    await deleteExperiment(id);
+    setExperiments(prev => prev.filter(e => e.id !== id));
+  }
 
   async function handleSaveSample(s: Sample) {
     await saveSample(s);
@@ -1196,7 +1226,7 @@ export default function NotebookPage() {
           />
         )}
         {activeTab === "experiments" && (
-          <ExperimentsTab experiments={experiments} onNew={() => setShowNewExp(true)} onNavigate={navigateToExp} />
+          <ExperimentsTab experiments={experiments} onNew={() => setShowNewExp(true)} onNavigate={navigateToExp} onDelete={handleDeleteExperiment} />
         )}
         {activeTab === "protocols" && (
           <ProtocolsTab templates={templates} onUse={handleUseTemplate} />
