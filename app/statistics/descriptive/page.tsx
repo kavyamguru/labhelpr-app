@@ -7,11 +7,12 @@ import {
   ComposedChart, Line,
 } from "recharts";
 import {
-  computeStats, shapiroWilk, dagostinoPearson,
+  computeStats,
   grubbsTest, iqrOutliers,
   parsePasteInput, fmtP, fmtN,
-  type DescStats, type NormalityResult, type GrubbsResult, type IQROutlier,
+  type DescStats, type GrubbsResult, type IQROutlier,
 } from "@/lib/stats/descriptive";
+import { useNormality, type NormalityApiResponse } from "@/lib/stats/useNormality";
 
 // ── color palette ────────────────────────────────────────────────────────────
 const COLORS = ["#a6daff", "#7dd3b4", "#f0a070", "#c4a0f0", "#f5d88a", "#f0879a"];
@@ -216,7 +217,7 @@ function QQPlot({ values, color }: { values: number[]; color: string }) {
 }
 
 // ── methods sentence ──────────────────────────────────────────────────────────
-function generateMethods(groups: Group[], transform: Transform, errorType: ErrorType, normalityResults: NormalityResult[]): string {
+function generateMethods(groups: Group[], transform: Transform, errorType: ErrorType, normalityResults: (NormalityApiResponse | null)[]): string {
   const n_total = groups.reduce((s, g) => s + g.values.filter((_, i) => !g.excluded.has(i)).length, 0);
   if (n_total === 0) return "";
 
@@ -224,13 +225,14 @@ function generateMethods(groups: Group[], transform: Transform, errorType: Error
     ? ` Data were ${transform === "log10" ? "log\u2081\u2080" : transform === "log2" ? "log\u2082" : "ln"}-transformed prior to analysis.`
     : "";
 
-  const allNormal = normalityResults.length > 0 && normalityResults.every(r => r.normal);
-  const normalityTest = normalityResults.length > 0 ? normalityResults[0].test : "";
-  const normalityText = normalityResults.length > 0
+  const valid = normalityResults.filter(Boolean) as NormalityApiResponse[];
+  const allNormal = valid.length > 0 && valid.every(r => r.is_normal);
+  const normalityTest = valid.length > 0 ? valid[0].test : "";
+  const normalityText = valid.length > 0
     ? ` Normality was assessed using the ${normalityTest} test.`
     : "";
 
-  const nonParamNote = normalityResults.length > 0 && !allNormal
+  const nonParamNote = valid.length > 0 && !allNormal
     ? " As data did not pass the normality test, non-parametric analyses are recommended."
     : "";
 
@@ -463,13 +465,12 @@ export default function DescriptiveStatsPage() {
     }),
   [groups, transform]);
 
-  const normalityResults = useMemo(() =>
-    groups.map(g => {
-      const vals = applyTransform(g.values.filter((_, i) => !g.excluded.has(i)), transform);
-      if (vals.length < 3) return null;
-      return vals.length <= 50 ? shapiroWilk(vals) : dagostinoPearson(vals);
-    }),
-  [groups, transform]);
+  // Normality: call the API (single source of truth — never computed locally)
+  const normalityGroups = useMemo(
+    () => groups.map(g => applyTransform(g.values.filter((_, i) => !g.excluded.has(i)), transform)),
+    [groups, transform],
+  );
+  const { results: normalityResults, status: normalityStatus } = useNormality(normalityGroups);
 
   const grubbsResults = useMemo(() =>
     groups.map(g => {
@@ -486,7 +487,7 @@ export default function DescriptiveStatsPage() {
   [groups]);
 
   const methodsText = useMemo(() =>
-    generateMethods(groups, transform, errorType, normalityResults.filter(Boolean) as NormalityResult[]),
+    generateMethods(groups, transform, errorType, normalityResults),
   [groups, transform, errorType, normalityResults]);
 
   // ── group mutations ─────────────────────────────────────────────────────────
@@ -670,7 +671,8 @@ export default function DescriptiveStatsPage() {
                   <p className="text-xs" style={{ color: "var(--text-muted)" }}>{g.label || `Group ${gi+1}`} — enter ≥ 2 values</p>
                 </div>
               );
-              const norm = normalityResults[gi];
+              const norm = normalityResults[gi] ?? null;
+              const normLoading = normalityStatus === "loading" && !norm;
               const cvWarn = isFinite(s.cv) && s.cv > 15;
               return (
                 <div key={g.id} className="rounded-2xl border p-5 space-y-1" style={{ background: "var(--bg-card)", borderColor: "var(--border)" }}>
@@ -678,16 +680,27 @@ export default function DescriptiveStatsPage() {
                     <h3 className="text-sm font-semibold" style={{ color: COLORS[gi % COLORS.length] }}>
                       {g.label || `Group ${gi+1}`}
                     </h3>
-                    {norm && (
+                    {normLoading && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ color: "var(--text-dim)", border: "1px solid var(--border)" }}>
+                        Testing…
+                      </span>
+                    )}
+                    {norm && !norm.error && (
                       <span
                         className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                        title={`${norm.test}: ${norm.interpretation}`}
                         style={{
-                          background: norm.normal ? "rgba(100,220,130,0.1)" : "rgba(240,100,90,0.1)",
-                          color: norm.normal ? "#64dc82" : "#f06459",
-                          border: `1px solid ${norm.normal ? "rgba(100,220,130,0.2)" : "rgba(240,100,90,0.2)"}`,
+                          background: norm.is_normal ? "rgba(100,220,130,0.1)" : "rgba(240,100,90,0.1)",
+                          color: norm.is_normal ? "#64dc82" : "#f06459",
+                          border: `1px solid ${norm.is_normal ? "rgba(100,220,130,0.2)" : "rgba(240,100,90,0.2)"}`,
                         }}
                       >
-                        {norm.normal ? "Normal" : "Non-normal"} (p={fmtP(norm.p)})
+                        {norm.is_normal ? "Normal" : "Non-normal"} (p={fmtP(norm.p)})
+                      </span>
+                    )}
+                    {norm?.error && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ color: "#f59e0b", border: "1px solid rgba(245,158,11,0.3)" }}>
+                        Normality test failed — check data
                       </span>
                     )}
                   </div>
@@ -715,31 +728,38 @@ export default function DescriptiveStatsPage() {
         </div>
 
         {/* Normality section */}
-        {normalityResults.some(Boolean) && (
+        {(normalityResults.some(Boolean) || normalityStatus === "loading") && (
           <div className="rounded-2xl border p-5 space-y-3" style={{ background: "var(--bg-card)", borderColor: "var(--border)" }}>
             <h2 className="text-sm font-semibold" style={{ color: "var(--text)" }}>Normality Test</h2>
+            {normalityStatus === "loading" && (
+              <p className="text-xs" style={{ color: "var(--text-dim)" }}>Running normality tests…</p>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {groups.map((g, gi) => {
                 const r = normalityResults[gi];
                 if (!r) return null;
+                if (r.error) return (
+                  <div key={g.id} className="rounded-xl p-3 space-y-1" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                    <p className="text-xs font-medium" style={{ color: COLORS[gi % COLORS.length] }}>{g.label || `Group ${gi+1}`}</p>
+                    <p className="text-xs" style={{ color: "#f59e0b" }}>Normality test failed — check data</p>
+                  </div>
+                );
                 return (
                   <div key={g.id} className="rounded-xl p-3 space-y-1" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
                     <p className="text-xs font-medium" style={{ color: COLORS[gi % COLORS.length] }}>{g.label || `Group ${gi+1}`}</p>
-                    <p className="text-xs" style={{ color: "var(--text-muted)" }}>{r.test}</p>
+                    <p className="text-xs" style={{ color: "var(--text-muted)" }}>{r.test} (n={r.n})</p>
                     <p className="text-sm font-mono" style={{ color: "var(--output-text)" }}>
-                      stat = {fmtN(r.stat, 4)}, p = {fmtP(r.p)}
+                      W = {fmtN(r.stat, 4)}, p = {fmtP(r.p)}
                     </p>
-                    <p className="text-xs font-medium" style={{ color: r.normal ? "#64dc82" : "#f06459" }}>
-                      {r.normal
-                        ? "Normally distributed (parametric tests OK)"
-                        : "Not normal — consider Mann-Whitney / Kruskal-Wallis"}
+                    <p className="text-xs font-medium" style={{ color: r.is_normal ? "#64dc82" : "#f06459" }}>
+                      {r.test}: p = {fmtP(r.p)} → {r.interpretation}
                     </p>
                   </div>
                 );
               })}
             </div>
             <p className="text-xs" style={{ color: "var(--text-dim)" }}>
-              Shapiro-Wilk used for n ≤ 50; D'Agostino-Pearson K² for n &gt; 50. Threshold: p &gt; 0.05 = normal.
+              Shapiro–Wilk (n ≤ 50) or D&apos;Agostino-Pearson K² (n &gt; 50). p &gt; 0.05 = normal. Via <code>/api/statistics/normality</code>.
             </p>
           </div>
         )}
